@@ -8,6 +8,7 @@ import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { qoderOptions } from "@multica/core/runtimes/qoder";
+import { claudeManagedOptions } from "@multica/core/runtimes/claude-managed";
 import { runtimeKeys, runtimeListOptions } from "@multica/core/runtimes/queries";
 import { useWSEvent } from "@multica/core/realtime";
 import { memberListOptions } from "@multica/core/workspace/queries";
@@ -19,6 +20,10 @@ import { useT } from "../../i18n";
 import { ConnectRemoteDialog } from "../../runtimes/components/connect-remote-dialog";
 import { RemoteRuntimeDialog } from "../../runtimes/components/remote-runtime-dialog";
 import { QODER_RUNTIME_LOCATOR } from "../../runtimes/components/qoder-detail-page";
+import {
+  CLAUDE_MANAGED_LOCATOR,
+  ClaudeConnectDialog,
+} from "../../runtimes/components/claude-managed-page";
 import { buildRuntimeMachines } from "../../runtimes/components/runtime-machines";
 import { CreateFlowFooter } from "./create-agent-footer";
 import { AgentCreateShell } from "./create-shell";
@@ -27,7 +32,11 @@ import { RuntimeChoiceList, qoderChoiceState } from "./runtime-choice-list";
 import { createPathWithParams } from "./squad-param";
 import { UnfinishedDraftsBanner } from "./unfinished-drafts";
 
-type Selection = { kind: "runtime"; runtimeId: string } | { kind: "qoder" } | null;
+type Selection =
+  | { kind: "runtime"; runtimeId: string }
+  | { kind: "qoder" }
+  | { kind: "claude" }
+  | null;
 
 /** How often a starting Qoder runtime is re-fetched while this screen shows it. */
 const QODER_REGISTER_POLL_MS = 3_000;
@@ -68,6 +77,7 @@ export function ChooseRuntimePage({
   );
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: qoderConnection } = useQuery(qoderOptions(wsId));
+  const { data: claudeConnection } = useQuery(claudeManagedOptions(wsId));
   const { data: sessions = [] } = useQuery(agentBuilderSessionListOptions(wsId));
 
   useWSEvent("daemon:register", () => {
@@ -95,12 +105,19 @@ export function ChooseRuntimePage({
   const qoderState = qoder
     ? qoderChoiceState(qoder, qoderRuntime?.status === "online")
     : null;
+  const claude = claudeConnection ?? null;
+  const claudeRuntime = groups.claudeRuntime;
+  const claudeState = claude
+    ? qoderChoiceState(claude, claudeRuntime?.status === "online")
+    : null;
 
   const [selection, setSelection] = useState<Selection>(null);
   const [query, setQuery] = useState("");
   const [showConnectRemote, setShowConnectRemote] = useState(false);
   const [qoderDialogOpen, setQoderDialogOpen] = useState(false);
   const [selectQoderWhenReady, setSelectQoderWhenReady] = useState(false);
+  const [claudeDialogOpen, setClaudeDialogOpen] = useState(false);
+  const [selectClaudeWhenReady, setSelectClaudeWhenReady] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
 
   const options = useMemo(() => {
@@ -125,10 +142,11 @@ export function ChooseRuntimePage({
     seeded.current = true;
     if (!runtimeParam) return;
     if (qoderRuntime?.id === runtimeParam) setSelection({ kind: "qoder" });
+    else if (claudeRuntime?.id === runtimeParam) setSelection({ kind: "claude" });
     else if (options.has(runtimeParam)) {
       setSelection({ kind: "runtime", runtimeId: runtimeParam });
     }
-  }, [runtimeParam, runtimesLoading, options, qoderRuntime]);
+  }, [runtimeParam, runtimesLoading, options, qoderRuntime, claudeRuntime]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -162,6 +180,24 @@ export function ChooseRuntimePage({
     }
   }, [selectQoderWhenReady, qoderState]);
 
+  useEffect(() => {
+    if (claudeState !== "starting") return;
+    const timer = setInterval(() => {
+      void qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });
+    }, QODER_REGISTER_POLL_MS);
+    return () => clearInterval(timer);
+  }, [claudeState, qc, wsId]);
+
+  useEffect(() => {
+    if (!selectClaudeWhenReady) return;
+    if (claudeState === "ready") {
+      setSelectClaudeWhenReady(false);
+      setSelection({ kind: "claude" });
+    } else if (claudeState === "error" || claudeState === "stopped") {
+      setSelectClaudeWhenReady(false);
+    }
+  }, [selectClaudeWhenReady, claudeState]);
+
   const selected =
     selection?.kind === "runtime" ? options.get(selection.runtimeId) ?? null : null;
   const nextRuntimeId =
@@ -169,9 +205,13 @@ export function ChooseRuntimePage({
       ? qoderState === "ready"
         ? qoderRuntime?.id ?? null
         : null
-      : selected && selected.option.runtime.status === "online"
-        ? selected.option.runtime.id
-        : null;
+      : selection?.kind === "claude"
+        ? claudeState === "ready"
+          ? claudeRuntime?.id ?? null
+          : null
+        : selected && selected.option.runtime.status === "online"
+          ? selected.option.runtime.id
+          : null;
 
   const goNext = (runtimeId: string) =>
     navigation.push(
@@ -189,9 +229,11 @@ export function ChooseRuntimePage({
   const summary =
     selection?.kind === "qoder"
       ? "Qoder Cloud Agents"
-      : selected
-        ? `${selected.option.label} · ${selected.where}`
-        : null;
+      : selection?.kind === "claude"
+        ? "Claude Managed Agents"
+        : selected
+          ? `${selected.option.label} · ${selected.where}`
+          : null;
 
   return (
     <AgentCreateShell
@@ -250,6 +292,9 @@ export function ChooseRuntimePage({
               qoder={qoder}
               qoderState={qoderState}
               qoderSelected={selection?.kind === "qoder"}
+              claude={claude}
+              claudeState={claudeState}
+              claudeSelected={selection?.kind === "claude"}
               selectedRuntimeId={selection?.kind === "runtime" ? selection.runtimeId : null}
               query={query}
               currentUserId={currentUserId}
@@ -268,6 +313,13 @@ export function ChooseRuntimePage({
               onConnectQoder={() => setQoderDialogOpen(true)}
               onManageQoder={() =>
                 navigation.push(paths.runtimeDetail(QODER_RUNTIME_LOCATOR))
+              }
+              onSelectClaude={() =>
+                setSelection((current) => (current?.kind === "claude" ? null : { kind: "claude" }))
+              }
+              onConnectClaude={() => setClaudeDialogOpen(true)}
+              onManageClaude={() =>
+                navigation.push(paths.runtimeDetail(CLAUDE_MANAGED_LOCATOR))
               }
               onAddRemote={() => setShowConnectRemote(true)}
             />
@@ -300,6 +352,12 @@ export function ChooseRuntimePage({
         <RemoteRuntimeDialog
           onConnected={() => setSelectQoderWhenReady(true)}
           onClose={() => setQoderDialogOpen(false)}
+        />
+      ) : null}
+      {claudeDialogOpen ? (
+        <ClaudeConnectDialog
+          onConnected={() => setSelectClaudeWhenReady(true)}
+          onClose={() => setClaudeDialogOpen(false)}
         />
       ) : null}
     </AgentCreateShell>

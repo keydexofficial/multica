@@ -11,6 +11,7 @@ import type {
 import {
   type AgentPresenceDetail,
   effectiveAccessScope,
+  claudeAgentId,
   qoderAgentId,
   summarizeActivityWindow,
   useWorkspaceActivityMap,
@@ -79,6 +80,8 @@ export function AgentPropertiesPanel({
   );
   const {
     qoderRuntime,
+    claudeRuntime,
+    cloudRuntime,
     canDiscoverRuntimeModels,
     runtimeOptions,
     changeModel,
@@ -130,7 +133,7 @@ export function AgentPropertiesPanel({
             runtimes={runtimeOptions}
             members={members}
             currentUserId={currentUserId}
-            canEdit={canEdit && !qoderRuntime}
+            canEdit={canEdit && !cloudRuntime}
             onChange={changeRuntime}
           />
         </ObjectProperty>
@@ -155,6 +158,14 @@ export function AgentPropertiesPanel({
             <Value>
               <span className="truncate font-mono">
                 {qoderAgentId(agent.runtime_config) || "—"}
+              </span>
+            </Value>
+          </ObjectProperty>
+        ) : claudeRuntime ? (
+          <ObjectProperty label={tr(($) => $.claude_managed.agent)}>
+            <Value>
+              <span className="truncate font-mono">
+                {claudeAgentId(agent.runtime_config) || "—"}
               </span>
             </Value>
           </ObjectProperty>
