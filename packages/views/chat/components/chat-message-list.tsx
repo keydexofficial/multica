@@ -1,6 +1,7 @@
 "use client";
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AnimatePresence } from "motion/react";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
 import { Virtuoso, type Components, type VirtuosoHandle } from "react-virtuoso";
@@ -19,14 +20,13 @@ import {
 } from "@multica/ui/components/ui/tooltip";
 import {
   ChevronRight,
-  ChevronDown,
   Brain,
   AlertCircle,
   AlertTriangle,
   ArrowUpRight,
-  Copy,
   RotateCw,
 } from "@multica/ui/icons";
+import { CopyCheckIcon } from "@multica/ui/components/common/copy-check-icon";
 import { useScrollFade } from "@multica/ui/hooks/use-scroll-fade";
 import { useReducedMotion } from "@multica/core/appearance";
 import { isTaskMessageTaskId, taskMessagesOptions } from "@multica/core/chat/queries";
@@ -483,13 +483,17 @@ export function ChatMessageList({
       )}
     </div>
     </div>
-    {jumpToLiveEnd.visible && (
-      <JumpToLiveEndButton
-        hasNewReply={jumpToLiveEnd.hasNewReply}
-        onClick={jumpToLiveEnd.jump}
-        className="absolute bottom-3 left-1/2 z-10 -translate-x-1/2"
-      />
-    )}
+    <div className="pointer-events-none absolute inset-x-0 bottom-3 z-10 flex justify-center">
+      <AnimatePresence initial={false}>
+        {jumpToLiveEnd.visible && (
+          <JumpToLiveEndButton
+            key="jump-to-live-end"
+            hasNewReply={jumpToLiveEnd.hasNewReply}
+            onClick={jumpToLiveEnd.jump}
+          />
+        )}
+      </AnimatePresence>
+    </div>
     </div>
     </PreviewSequenceProvider>
   );
@@ -1034,8 +1038,20 @@ function MessageCopyButton({
   content: string;
 }) {
   const { t } = useT("chat");
+  const [copied, setCopied] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, []);
+
   const handleCopy = async () => {
     if (await copyText(content)) {
+      setCopied(true);
+      if (timerRef.current) clearTimeout(timerRef.current);
+      timerRef.current = setTimeout(() => setCopied(false), 2000);
       toast.success(t(($) => $.message_list.copied_toast));
     } else {
       toast.error(t(($) => $.message_list.copy_failed_toast));
@@ -1054,7 +1070,7 @@ function MessageCopyButton({
           />
         }
       >
-        <Copy />
+        <CopyCheckIcon copied={copied} />
       </TooltipTrigger>
       <TooltipContent side="top">
         {t(($) => $.message_list.copy_action)}
@@ -1177,11 +1193,12 @@ function FailureBubble({
           {rawError.trim() && (
             <Collapsible open={open} onOpenChange={setOpen}>
               <CollapsibleTrigger className="mt-0.5 flex items-center gap-1 text-caption text-muted-foreground hover:text-foreground transition-colors">
-                {open ? (
-                  <ChevronDown className="size-3" />
-                ) : (
-                  <ChevronRight className="size-3" />
-                )}
+                <ChevronRight
+                  className={cn(
+                    "size-3 shrink-0 transition-transform duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none",
+                    open && "rotate-90",
+                  )}
+                />
                 <span>{t(($) => $.message_list.show_details)}</span>
               </CollapsibleTrigger>
               <CollapsibleContent>
@@ -1330,7 +1347,12 @@ function OuterProcessFold({
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
       <CollapsibleTrigger className="flex items-center gap-1 text-caption text-muted-foreground hover:text-foreground transition-colors">
-        {open ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+        <ChevronRight
+          className={cn(
+            "size-3 shrink-0 transition-transform duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none",
+            open && "rotate-90",
+          )}
+        />
         <span>{t(($) => $.message_list.process_steps, { count: displayedStepCount })}</span>
       </CollapsibleTrigger>
       <CollapsibleContent>
@@ -1412,7 +1434,7 @@ function ToolCallRow({ item }: { item: ChatTimelineItem }) {
       <CollapsibleTrigger className="flex w-full items-center gap-1.5 rounded-xs px-1 -mx-1 py-0.5 text-caption hover:bg-accent/30 transition-colors">
         <ChevronRight
           className={cn(
-            "h-3 w-3 shrink-0 text-muted-foreground transition-transform",
+            "h-3 w-3 shrink-0 text-muted-foreground transition-transform duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none",
             open && "rotate-90",
             !hasInput && "invisible",
           )}
@@ -1456,7 +1478,10 @@ function ToolResultRow({ item }: { item: ChatTimelineItem }) {
     <Collapsible open={open} onOpenChange={setOpen}>
       <CollapsibleTrigger className="flex w-full items-start gap-1.5 rounded-xs px-1 -mx-1 py-0.5 text-caption hover:bg-accent/30 transition-colors">
         <ChevronRight
-          className={cn("h-3 w-3 shrink-0 text-muted-foreground transition-transform mt-0.5", open && "rotate-90")}
+          className={cn(
+            "h-3 w-3 shrink-0 text-muted-foreground transition-transform duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none mt-0.5",
+            open && "rotate-90",
+          )}
         />
         <span className="text-muted-foreground truncate">
           {labelPrefix}{preview}
