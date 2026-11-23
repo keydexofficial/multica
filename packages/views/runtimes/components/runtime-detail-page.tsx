@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { isManagedClaudeRuntime } from "@multica/core/runtimes/claude-managed";
+import { isManagedOMARuntime } from "@multica/core/runtimes/oma";
 import { AlertCircle, MoreHorizontal, Pencil, Plus, Server } from "@multica/ui/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@multica/core/auth";
@@ -60,6 +61,7 @@ import {
   ClaudeManagedPage,
   isClaudeManagedLocator,
 } from "./claude-managed-page";
+import { isOMAManagedLocator, OMAManagedPage } from "./oma-managed-page";
 import {
   HealthIcon,
   ProviderIconStack,
@@ -228,6 +230,12 @@ export function RuntimeDetailPage({
     (machine?.runtimes.length && machine.runtimes.every(isManagedClaudeRuntime))
   ) {
     return <ClaudeManagedPage />;
+  }
+  if (
+    isOMAManagedLocator(machineLocator, runtimes) ||
+    (machine?.runtimes.length && machine.runtimes.every(isManagedOMARuntime))
+  ) {
+    return <OMAManagedPage />;
   }
 
   const segments = [{ href: paths.runtimes(), label: t(($) => $.page.title) }];

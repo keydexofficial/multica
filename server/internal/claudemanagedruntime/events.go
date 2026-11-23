@@ -66,7 +66,7 @@ func (b *Bridge) events(ctx context.Context, r *run) error {
 		if err := b.anthropic.call(ctx, http.MethodGet, "/sessions/"+url.PathEscape(r.SessionID)+"/events?"+q.Encode(), nil, &page); err != nil {
 			var ae *apiError
 			if errors.As(err, &ae) && ae.Status == http.StatusNotFound {
-				return b.reject(ctx, r, "Claude session no longer exists")
+				return b.reject(ctx, r, b.profile.DisplayName+" session no longer exists")
 			}
 			return err
 		}
@@ -84,16 +84,16 @@ func (b *Bridge) events(ctx context.Context, r *run) error {
 			break
 		}
 		if page.NextPage == q.Get("page") {
-			return fmt.Errorf("Claude pagination cursor did not advance")
+			return fmt.Errorf("%s pagination cursor did not advance", b.profile.DisplayName)
 		}
 		q.Set("page", page.NextPage)
 	}
 	if skipping {
-		return fmt.Errorf("Claude event %s is missing from session %s history", r.Cursor, r.SessionID)
+		return fmt.Errorf("%s event %s is missing from session %s history", b.profile.DisplayName, r.Cursor, r.SessionID)
 	}
 	for _, e := range fresh {
 		if e.ID == "" {
-			return fmt.Errorf("Claude event has no ID")
+			return fmt.Errorf("%s event has no ID", b.profile.DisplayName)
 		}
 		if e.ID == r.Cursor {
 			continue
@@ -115,12 +115,12 @@ func (b *Bridge) events(ctx context.Context, r *run) error {
 			msg["type"] = "text"
 			msg["content"] = e.text()
 			r.Output = e.text()
-		case "agent.tool_use", "agent.mcp_tool_use":
+		case "agent.tool_use", "agent.mcp_tool_use", "agent.custom_tool_use":
 			msg["type"] = "tool_use"
 			msg["call_id"] = e.ID
 			msg["tool"] = e.Name
 			msg["input"] = e.Input
-		case "agent.tool_result", "agent.mcp_tool_result":
+		case "agent.tool_result", "agent.mcp_tool_result", "agent.custom_tool_result":
 			msg["type"] = "tool_result"
 			if e.ToolUseID != "" {
 				msg["call_id"] = e.ToolUseID
@@ -139,13 +139,13 @@ func (b *Bridge) events(ctx context.Context, r *run) error {
 			} else {
 				r.Outcome = "failed"
 				if r.Failure == "" {
-					r.Failure = "Claude stopped: " + e.StopReason.Type
+					r.Failure = b.profile.DisplayName + " stopped: " + e.StopReason.Type
 				}
 			}
 		case "session.status_terminated", "session.deleted":
 			r.Phase = "final"
 			r.Outcome = "failed"
-			r.Failure = "Claude session terminated"
+			r.Failure = b.profile.DisplayName + " session terminated"
 		}
 		if len(msg) > 0 {
 			msg["seq"] = r.Seq + 1
@@ -167,7 +167,7 @@ func (b *Bridge) events(ctx context.Context, r *run) error {
 	r.Page, r.PageFrom = "", ""
 	if page.NextPage != "" {
 		if page.NextPage == q.Get("page") {
-			return fmt.Errorf("Claude pagination cursor did not advance")
+			return fmt.Errorf("%s pagination cursor did not advance", b.profile.DisplayName)
 		}
 		r.Page, r.PageFrom = page.NextPage, q.Get("created_at[gte]")
 	}
@@ -175,7 +175,7 @@ func (b *Bridge) events(ctx context.Context, r *run) error {
 		return err
 	}
 	if r.Phase == "sending" {
-		return fmt.Errorf("submission not yet confirmed; inspect Claude session %s before any manual resubmission", r.SessionID)
+		return fmt.Errorf("submission not yet confirmed; inspect %s session %s before any manual resubmission", b.profile.DisplayName, r.SessionID)
 	}
 	return nil
 }

@@ -13,7 +13,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
-	"github.com/multica-ai/multica/server/internal/claudemanagedruntime"
+	"github.com/multica-ai/multica/server/internal/cloudagent"
 	"github.com/multica-ai/multica/server/internal/qoderruntime"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -209,42 +209,13 @@ type qoderOverrides struct {
 func (o qoderOverrides) validate(provider string) error {
 	mcp := strings.TrimSpace(string(o.mcpConfig))
 	if o.skills > 0 || o.customEnv > 0 || o.customArgs > 0 || (mcp != "" && mcp != "null" && mcp != "{}") || o.model != "" || o.thinkingLevel != "" || o.serviceTier != "" {
-		if provider == claudemanagedruntime.Provider {
-			return fmt.Errorf("Agents on Claude Managed Agents take skills, tools, credentials and model from the Claude agent; remove them from this agent")
+		descriptor, ok := cloudagent.Lookup(provider)
+		if !ok {
+			return nil
 		}
-		return fmt.Errorf("Qoder agents take skills, tools, credentials and model from the Qoder Agent; remove them from this agent")
+		return fmt.Errorf("%s agents take skills, tools, credentials and model from the %s; remove them from this agent", descriptor.ShortName, descriptor.AgentNoun)
 	}
 	return nil
-}
-
-// isCloudAgentProvider reports whether agents on provider run on a cloud agent
-// provider's own configuration and are validated at save time.
-func isCloudAgentProvider(provider string) bool {
-	return provider == qoderruntime.Provider || provider == claudemanagedruntime.Provider
-}
-
-// cloudAgentServiceName names the cloud agent provider behind provider, or ""
-// for other providers. Quick-create is refused for both bridges before any
-// work is persisted; chat only for Claude Managed Agents, whose bridge runs
-// issue runs only.
-func cloudAgentServiceName(provider string) string {
-	switch provider {
-	case qoderruntime.Provider:
-		return "Qoder Cloud Agents"
-	case claudemanagedruntime.Provider:
-		return "Claude Managed Agents"
-	}
-	return ""
-}
-
-// validateCloudAgentConfig checks the runtime_config binding the provider's
-// bridge reads when it claims a task.
-func validateCloudAgentConfig(provider string, raw []byte) error {
-	if provider == claudemanagedruntime.Provider {
-		_, err := claudemanagedruntime.ParseAgentConfig(raw)
-		return err
-	}
-	return validateQoderAgentConfig(raw)
 }
 
 // storedQoderOverrides reads an agent's saved execution settings. Skills live

@@ -120,6 +120,22 @@ describe("buildRuntimeChoiceGroups", () => {
     expect(result.claudeRuntime?.id).toBe("claude-new");
     expect(result.cloud.map((option) => option.runtime.id)).toEqual(["claude-bridge"]);
   });
+
+  it("gives the managed OMA runtime its own tile and leaves a standalone bridge in the cloud list", () => {
+    const cloud = {
+      runtime_mode: "cloud" as const,
+      provider: "oma_cloud",
+      owner_id: "admin",
+      visibility: "public" as const,
+    };
+    const result = groups([
+      makeRuntime({ ...cloud, id: "oma-old", daemon_id: "oma-managed-ws-1", status: "offline" }),
+      makeRuntime({ ...cloud, id: "oma-new", daemon_id: "oma-managed-ws-1" }),
+      makeRuntime({ ...cloud, id: "oma-bridge", daemon_id: "oma-bridge-abc" }),
+    ]);
+    expect(result.omaRuntime?.id).toBe("oma-new");
+    expect(result.cloud.map((option) => option.runtime.id)).toEqual(["oma-bridge"]);
+  });
 });
 
 describe("harness helpers", () => {

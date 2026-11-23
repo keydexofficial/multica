@@ -219,6 +219,7 @@
     "./autopilots/stores": "./autopilots/stores/index.ts",
     "./runtimes/qoder": "./runtimes/qoder.ts",
     "./runtimes/claude-managed": "./runtimes/claude-managed.ts",
+    "./runtimes/oma": "./runtimes/oma.ts",
     "./docs": "./docs/index.ts"
   },
   "dependencies": {

@@ -201,7 +201,8 @@
     "rename_required": "Le nom est obligatoire",
     "edit_description_title": "Modifier la description",
     "description_placeholder": "Que fait cet agent ?",
-    "cancel": "Annuler"
+    "cancel": "Annuler",
+    "oma_execution_note": "Le modèle, les outils et les compétences sont définis sur l’agent OMA."
   },
   "overview": {
     "attention_title": "Des exécutions demandent votre attention",
@@ -302,7 +303,8 @@
     "discard_dialog_title": "Abandonner les modifications non enregistrées ?",
     "discard_dialog_description": "Cet onglet contient des modifications non enregistrées. Les quitter maintenant les abandonnera.",
     "discard_keep": "Continuer à modifier",
-    "discard_confirm": "Abandonner les modifications"
+    "discard_confirm": "Abandonner les modifications",
+    "oma_agent": "Agent OMA"
   },
   "creation_studio": {
     "title": "Créer un agent",

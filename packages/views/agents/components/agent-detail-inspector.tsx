@@ -139,6 +139,7 @@ export function AgentDetailInspector({
   const {
     qoderRuntime,
     claudeRuntime,
+    omaRuntime,
     cloudRuntime,
     canDiscoverRuntimeModels,
     runtimeOptions,
@@ -148,8 +149,9 @@ export function AgentDetailInspector({
   const conversationStartersEnabled = useConfigStore(
     (state) => state.agentConversationStartersSupported,
   );
-  // Claude Managed Agents never opens a chat, so nothing chat-facing applies.
-  const showStarters = conversationStartersEnabled && !claudeRuntime;
+  // Claude and OMA never open a chat, so nothing chat-facing applies.
+  const showStarters =
+    conversationStartersEnabled && !claudeRuntime && !omaRuntime;
   const startersComplete = starters.every(
     (item) => item.label.trim() && item.prompt.trim(),
   );
@@ -291,7 +293,9 @@ export function AgentDetailInspector({
                 ? t(($) => $.inspector.qoder_execution_note)
                 : claudeRuntime
                   ? t(($) => $.inspector.claude_execution_note)
-                  : undefined
+                  : omaRuntime
+                    ? t(($) => $.inspector.oma_execution_note)
+                    : undefined
             }
           >
             <SettingsCard>

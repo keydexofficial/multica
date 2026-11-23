@@ -715,7 +715,8 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
 
           {/* Cloud agents take their skills and apps from their own service. */}
           {runtime?.provider === "qoder_cloud" ||
-          runtime?.provider === "claude_managed" ? null : (
+          runtime?.provider === "claude_managed" ||
+          runtime?.provider === "oma_cloud" ? null : (
             <>
               {composioAppsEnabled && (
                 <AgentAppsSection

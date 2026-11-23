@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
+	"github.com/multica-ai/multica/server/internal/cloudagent"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	"github.com/multica-ai/multica/server/internal/logger"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
@@ -1335,6 +1336,10 @@ func (h *Handler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "Claude Managed Agents cleanup is pending; retry workspace deletion shortly")
 		return
 	}
+	if err := h.prepareOMAWorkspaceDeletion(r.Context(), uuidToString(requester.WorkspaceID)); err != nil {
+		writeError(w, http.StatusConflict, "OMA Managed Agents cleanup is pending; retry workspace deletion shortly")
+		return
+	}
 
 	// Invalidate membership cache for all workspace members before deletion.
 	// After CASCADE deletes the member rows, cache entries become harmless
@@ -1483,10 +1488,10 @@ func (h *Handler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 		{
 			name: "delete cloud agent connections",
 			run: func() error {
-				if _, err := tx.Exec(ctx, `DELETE FROM daemon_token WHERE id IN (SELECT token_id FROM cloud_agent_connection WHERE provider IN ('qoder_cloud','claude_managed') AND workspace_id=$1)`, requester.WorkspaceID); err != nil {
+				if _, err := tx.Exec(ctx, `DELETE FROM daemon_token WHERE id IN (SELECT token_id FROM cloud_agent_connection WHERE provider = ANY($2::text[]) AND workspace_id=$1)`, requester.WorkspaceID, cloudagent.Providers()); err != nil {
 					return err
 				}
-				_, err := tx.Exec(ctx, `DELETE FROM cloud_agent_connection WHERE provider IN ('qoder_cloud','claude_managed') AND workspace_id=$1`, requester.WorkspaceID)
+				_, err := tx.Exec(ctx, `DELETE FROM cloud_agent_connection WHERE provider = ANY($2::text[]) AND workspace_id=$1`, requester.WorkspaceID, cloudagent.Providers())
 				return err
 			},
 		},

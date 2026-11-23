@@ -19,9 +19,10 @@ import (
 const DefaultAnthropicURL = "https://api.anthropic.com/v1"
 
 type api struct {
-	base, token string
-	headers     map[string]string
-	client      *http.Client
+	base, token        string
+	headers            map[string]string
+	client             *http.Client
+	detectWorkspaceKey bool
 }
 type apiError struct {
 	Status int
@@ -84,27 +85,25 @@ func newAPI(base, token, workspace string) (*api, error) {
 	if workspace != "" {
 		headers["X-Workspace-ID"] = workspace
 	}
-	return newClient(base, token, headers)
+	return newClient(base, token, headers, false, false)
 }
 
-// newAnthropicAPI builds the Claude Managed Agents client. It requires a
-// workspace-scoped API key; anthropic-workspace-id is deliberately unsupported.
-func newAnthropicAPI(base, token string) (*api, error) {
-	return newClient(base, token, map[string]string{"anthropic-version": "2023-06-01", "anthropic-beta": "managed-agents-2026-04-01"})
+func newAnthropicAPI(base, token string, profile Profile) (*api, error) {
+	return newClient(base, token, map[string]string{"anthropic-version": "2023-06-01", "anthropic-beta": "managed-agents-2026-04-01"}, profile.AllowPlainHTTP, !profile.SkipWorkspaceKeyDetection)
 }
 
-func newClient(base, token string, headers map[string]string) (*api, error) {
+func newClient(base, token string, headers map[string]string, allowPlainHTTP, detectWorkspaceKey bool) (*api, error) {
 	u, err := url.Parse(base)
 	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return nil, fmt.Errorf("invalid API base URL")
 	}
-	if u.Scheme == "http" && u.Hostname() != "localhost" && u.Hostname() != "127.0.0.1" && u.Hostname() != "::1" {
+	if u.Scheme == "http" && !allowPlainHTTP && u.Hostname() != "localhost" && u.Hostname() != "127.0.0.1" && u.Hostname() != "::1" {
 		return nil, fmt.Errorf("API base URL must use HTTPS except on loopback")
 	}
 	if strings.TrimSpace(token) == "" {
 		return nil, fmt.Errorf("API token is required")
 	}
-	return &api{base: strings.TrimRight(base, "/"), token: token, headers: headers, client: &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
+	return &api{base: strings.TrimRight(base, "/"), token: token, headers: headers, detectWorkspaceKey: detectWorkspaceKey, client: &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
 
 // Errors deliberately omit remote bodies and URLs, which may echo credentials or task content.
@@ -139,7 +138,7 @@ func (a *api) call(ctx context.Context, method, path string, in, out any) error 
 		return &apiError{
 			Status:               resp.StatusCode,
 			RetryAfter:           parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()),
-			WorkspaceKeyRequired: resp.StatusCode >= 400 && resp.StatusCode < 500 && requiresWorkspaceHeader(resp.Body),
+			WorkspaceKeyRequired: a.detectWorkspaceKey && resp.StatusCode >= 400 && resp.StatusCode < 500 && requiresWorkspaceHeader(resp.Body),
 		}
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20+1))

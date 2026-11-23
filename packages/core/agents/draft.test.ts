@@ -14,6 +14,7 @@ import {
 const draft = (): AgentDraft => ({
   qoderAgentId: "",
   claudeAgentId: "",
+  omaAgentId: "",
   name: "Old name",
   description: "Old description",
   instructions: "Old instructions",
@@ -404,4 +405,23 @@ it("drops conversation starters for Claude Managed Agents, which has no chat", (
     runtimeProvider: "claude_managed",
   });
   expect(request.conversation_starters).toBeUndefined();
+});
+
+it("binds an OMA runtime to its OMA agent and drops chat-only settings", () => {
+  const current: AgentDraft = {
+    ...draft(),
+    claudeAgentId: "agent_claude",
+    omaAgentId: "agent_oma",
+    conversationStarters: [{ label: "Plan", prompt: "Plan it" }],
+    thinkingLevel: "high",
+  };
+  const request = buildCreateAgentRequest({
+    draft: current,
+    runtimeId: "rt-oma",
+    runtimeProvider: "oma_cloud",
+  });
+  expect(request.runtime_config).toEqual({ oma_agent_id: "agent_oma" });
+  expect(request.conversation_starters).toBeUndefined();
+  expect(request.thinking_level).toBeUndefined();
+  expect(applyDraftRuntimeChange(current, "another-runtime").omaAgentId).toBe("");
 });

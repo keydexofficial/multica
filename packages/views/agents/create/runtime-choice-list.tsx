@@ -16,6 +16,7 @@ import {
 } from "@multica/ui/icons";
 import type { QoderConnection } from "@multica/core/runtimes/qoder";
 import type { ClaudeConnection } from "@multica/core/runtimes/claude-managed";
+import type { OMAConnection } from "@multica/core/runtimes/oma";
 import { Button, buttonVariants } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n";
@@ -38,7 +39,7 @@ export type QoderChoiceState =
   | "error"
   | "stopped";
 
-type CloudConnection = QoderConnection | ClaudeConnection;
+type CloudConnection = QoderConnection | ClaudeConnection | OMAConnection;
 
 export function qoderChoiceState(
   connection: CloudConnection,
@@ -52,6 +53,7 @@ export function qoderChoiceState(
 
 const QODER_NAME = "Qoder Cloud Agents";
 const CLAUDE_NAME = "Claude Managed Agents";
+const OMA_NAME = "OMA Managed Agents";
 
 const COMING_SOON = [
   { provider: "cursor", name: "Cursor Cloud Agents", vendor: "Cursor" },
@@ -521,6 +523,9 @@ export interface RuntimeChoiceListProps {
   claude: ClaudeConnection | null;
   claudeState: QoderChoiceState | null;
   claudeSelected: boolean;
+  oma: OMAConnection | null;
+  omaState: QoderChoiceState | null;
+  omaSelected: boolean;
   selectedRuntimeId: string | null;
   query: string;
   currentUserId: string | null;
@@ -533,6 +538,9 @@ export interface RuntimeChoiceListProps {
   onSelectClaude: () => void;
   onConnectClaude: () => void;
   onManageClaude: () => void;
+  onSelectOMA: () => void;
+  onConnectOMA: () => void;
+  onManageOMA: () => void;
   onAddRemote: () => void;
 }
 
@@ -553,6 +561,9 @@ export function RuntimeChoiceList({
   claude,
   claudeState,
   claudeSelected,
+  oma,
+  omaState,
+  omaSelected,
   selectedRuntimeId,
   query,
   currentUserId,
@@ -565,6 +576,9 @@ export function RuntimeChoiceList({
   onSelectClaude,
   onConnectClaude,
   onManageClaude,
+  onSelectOMA,
+  onConnectOMA,
+  onManageOMA,
   onAddRemote,
 }: RuntimeChoiceListProps) {
   const { t } = useT("agents");
@@ -586,11 +600,14 @@ export function RuntimeChoiceList({
   const showQoder = !!qoder && !!qoderState && (!q || QODER_NAME.toLowerCase().includes(q));
   const showClaude =
     !!claude && !!claudeState && (!q || CLAUDE_NAME.toLowerCase().includes(q));
+  const showOMA =
+    !!oma && !!omaState && (!q || OMA_NAME.toLowerCase().includes(q));
   const matchedCloud = cloud.filter((option) => harnessMatches(option, "", query));
   const soon = COMING_SOON.filter((item) => !q || item.name.toLowerCase().includes(q));
 
   const showMachines = matchedDevices.length > 0 || showWebRow || !searching;
-  const showCloud = showQoder || showClaude || matchedCloud.length > 0 || soon.length > 0;
+  const showCloud =
+    showQoder || showClaude || showOMA || matchedCloud.length > 0 || soon.length > 0;
 
   if (!showMachines && !showCloud) {
     return (
@@ -705,7 +722,12 @@ export function RuntimeChoiceList({
           <GroupHeader
             icon={Cloud}
             title={t(($) => $.creation_studio.runtime_step.groups.cloud)}
-            count={(showQoder ? 1 : 0) + (showClaude ? 1 : 0) + matchedCloud.length}
+            count={
+              (showQoder ? 1 : 0) +
+              (showClaude ? 1 : 0) +
+              (showOMA ? 1 : 0) +
+              matchedCloud.length
+            }
           />
           {showQoder && qoder && qoderState ? (
             <CloudServiceRow
@@ -735,6 +757,21 @@ export function RuntimeChoiceList({
               onSelect={onSelectClaude}
               onConnect={onConnectClaude}
               onManage={onManageClaude}
+            />
+          ) : null}
+          {showOMA && oma && omaState ? (
+            <CloudServiceRow
+              provider="oma_cloud"
+              name={OMA_NAME}
+              vendor="OMA"
+              connection={oma}
+              state={omaState}
+              selected={omaSelected}
+              canManage={canManage}
+              query={query}
+              onSelect={onSelectOMA}
+              onConnect={onConnectOMA}
+              onManage={onManageOMA}
             />
           ) : null}
           {matchedCloud.map((option) => (

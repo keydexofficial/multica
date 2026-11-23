@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/channelmedia"
+	"github.com/multica-ai/multica/server/internal/cloudagent"
 	"github.com/multica-ai/multica/server/internal/dispatch"
 	"github.com/multica-ai/multica/server/internal/issueguard"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
@@ -3100,8 +3101,7 @@ func (h *Handler) checkQuickCreateDaemonVersionAtLeast(ctx context.Context, sour
 			"reason": "agent's runtime is no longer registered",
 		}
 	}
-	// The Qoder bridge creates the issue itself instead of running the CLI.
-	if rt.Provider == qoderruntime.Provider {
+	if cloudagent.IsCloud(rt.Provider) && cloudAgentSupportsQuickCreate(rt.Provider) {
 		return 0, nil
 	}
 	if name := cloudAgentServiceName(rt.Provider); name != "" {

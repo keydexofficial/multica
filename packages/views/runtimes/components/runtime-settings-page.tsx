@@ -17,6 +17,8 @@ import { buildRuntimeMachines } from "./runtime-machines";
 import { QoderDetailPage } from "./qoder-detail-page";
 import { isManagedClaudeRuntime } from "@multica/core/runtimes/claude-managed";
 import { ClaudeManagedPage } from "./claude-managed-page";
+import { isManagedOMARuntime } from "@multica/core/runtimes/oma";
+import { OMAManagedPage } from "./oma-managed-page";
 import { useT } from "../../i18n";
 
 export function RuntimeSettingsPage({
@@ -93,6 +95,7 @@ export function RuntimeSettingsPage({
   const { machine, runtime } = target;
   if (runtime.provider === "qoder_cloud") return <QoderDetailPage />;
   if (isManagedClaudeRuntime(runtime)) return <ClaudeManagedPage />;
+  if (isManagedOMARuntime(runtime)) return <OMAManagedPage />;
 
   return (
     <RuntimeDetail

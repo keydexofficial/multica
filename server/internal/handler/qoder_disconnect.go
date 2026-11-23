@@ -14,7 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/multica-ai/multica/server/internal/claudemanagedruntime"
+	"github.com/multica-ai/multica/server/internal/cloudagent"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -214,22 +214,18 @@ func (h *Handler) checkQoderDisconnectPlan(w http.ResponseWriter, ctx context.Co
 
 // connectionName is how refusals name the connection that owns a runtime.
 func connectionName(provider string) string {
-	if provider == "qoder_cloud" {
-		return "Qoder"
-	}
-	return cloudAgentServiceName(provider)
+	return cloudAgentConnectionName(provider)
 }
 
 // connectionManagesRuntime reports whether a runtime belongs to a live cloud
 // agent connection, whose lifecycle is owned by connect and disconnect rather
 // than the generic runtime endpoints.
 func (h *Handler) connectionManagesRuntime(ctx context.Context, rt db.AgentRuntime) (bool, error) {
-	if !isCloudAgentProvider(rt.Provider) {
+	descriptor, ok := cloudagent.Lookup(rt.Provider)
+	if !ok {
 		return false, nil
 	}
-	// A standalone Claude bridge may share the workspace with the managed one;
-	// only the managed daemon's runtime belongs to the connection.
-	if rt.Provider == claudemanagedruntime.Provider && !strings.HasPrefix(rt.DaemonID.String, claudeManagedDaemonPrefix) {
+	if descriptor.ManagedDaemonOnly && !strings.HasPrefix(rt.DaemonID.String, descriptor.DaemonPrefix) {
 		return false, nil
 	}
 	var managed bool

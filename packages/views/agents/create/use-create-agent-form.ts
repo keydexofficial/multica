@@ -171,6 +171,7 @@ export function useCreateAgentForm(options?: {
       isRuntimeUsableForUser(selectedRuntime, currentUserId) &&
       (selectedRuntime.provider !== "qoder_cloud" || !!draft.qoderAgentId) &&
       (selectedRuntime.provider !== "claude_managed" || !!draft.claudeAgentId) &&
+      (selectedRuntime.provider !== "oma_cloud" || !!draft.omaAgentId) &&
       isDraftDescriptionWithinLimit(draft.description) &&
       !accessInvalid &&
       !conversationStartersInvalid,

@@ -18,12 +18,14 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/multica-ai/multica/server/internal/cloudagent"
 )
 
-const Provider = "claude_managed"
+const Provider = cloudagent.ClaudeProvider
 
-// ErrCleanupUnauthorized keeps cleanup pending until Anthropic access is restored.
-var ErrCleanupUnauthorized = errors.New("Anthropic denied session cleanup; restore access or update the API key")
+// ErrCleanupUnauthorized keeps cleanup pending until provider access is restored.
+var ErrCleanupUnauthorized = errors.New("Provider denied session cleanup; restore access or update the API key")
 
 var validVaultID = regexp.MustCompile(`^vlt_[a-zA-Z0-9_-]{1,128}$`)
 
@@ -58,6 +60,7 @@ const MaxConcurrencyLimit = 10
 
 type Bridge struct {
 	cfg                Config
+	profile            Profile
 	multica, anthropic *api
 	state              *journal
 	path               string
@@ -66,6 +69,11 @@ type Bridge struct {
 }
 
 func New(cfg Config, log *slog.Logger) (*Bridge, error) {
+	return NewWithProfile(cfg, ClaudeProfile(), log)
+}
+
+func NewWithProfile(cfg Config, profile Profile, log *slog.Logger) (*Bridge, error) {
+	profile = normalizeProfile(profile)
 	workspace, err := uuid.Parse(cfg.WorkspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("workspace ID must be a UUID")
@@ -107,23 +115,23 @@ func New(cfg Config, log *slog.Logger) (*Bridge, error) {
 		return nil, fmt.Errorf("max concurrency must be between 1 and %d", MaxConcurrencyLimit)
 	}
 	if cfg.Name == "" {
-		cfg.Name = "Claude Managed Agents"
+		cfg.Name = profile.DisplayName
 	}
 	m, err := newAPI(cfg.MulticaURL, cfg.MulticaToken, cfg.WorkspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("Multica: %w", err)
 	}
 	if cfg.AnthropicURL == "" {
-		cfg.AnthropicURL = DefaultAnthropicURL
+		cfg.AnthropicURL = profile.DefaultBaseURL
 	}
-	q, err := newAnthropicAPI(cfg.AnthropicURL, cfg.AnthropicToken)
+	q, err := newAnthropicAPI(cfg.AnthropicURL, cfg.AnthropicToken, profile)
 	if err != nil {
-		return nil, fmt.Errorf("Anthropic: %w", err)
+		return nil, fmt.Errorf("provider: %w", err)
 	}
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Bridge{cfg: cfg, multica: m, anthropic: q, path: filepath.Join(cfg.StateDir, "state.json"), log: log}, nil
+	return &Bridge{cfg: cfg, profile: profile, multica: m, anthropic: q, path: filepath.Join(cfg.StateDir, "state.json"), log: log}, nil
 }
 
 // Run is single-instance per journal and processes up to MaxConcurrency runs.
@@ -173,7 +181,7 @@ func (b *Bridge) Run(ctx context.Context) error {
 	if err = b.persist(); err != nil {
 		return err
 	}
-	b.log.InfoContext(ctx, "Claude Managed Agents runtime registered", "runtime_id", b.state.RuntimeID)
+	b.log.InfoContext(ctx, b.profile.DisplayName+" runtime registered", "runtime_id", b.state.RuntimeID)
 	if b.cfg.OnReady != nil {
 		if err := b.cfg.OnReady(ctx, b.state.RuntimeID); err != nil {
 			return err
@@ -216,7 +224,7 @@ func (b *Bridge) Run(ctx context.Context) error {
 			if errors.As(err, &diskErr) {
 				return err
 			}
-			b.log.WarnContext(ctx, "Claude Managed Agents bridge will retry reconciliation", "error", err)
+			b.log.WarnContext(ctx, b.profile.DisplayName+" bridge will retry reconciliation", "error", err)
 		}
 		select {
 		case <-ctx.Done():
@@ -234,7 +242,7 @@ const StandaloneDaemonPrefix = "claude-bridge-"
 func (b *Bridge) register(ctx context.Context, binding string) error {
 	daemonID := b.cfg.DaemonID
 	if daemonID == "" {
-		daemonID = StandaloneDaemonPrefix + binding[:24]
+		daemonID = b.profile.StandalonePrefix + binding[:24]
 	}
 	var response struct {
 		Runtimes []struct {
@@ -244,12 +252,12 @@ func (b *Bridge) register(ctx context.Context, binding string) error {
 	}
 	err := b.multica.call(ctx, http.MethodPost, "/api/daemon/register", map[string]any{
 		"workspace_id": b.cfg.WorkspaceID, "daemon_id": daemonID, "device_name": b.cfg.Name,
-		"runtimes": []map[string]string{{"name": b.cfg.Name, "type": Provider, "status": "online", "runtime_mode": "cloud"}},
+		"runtimes": []map[string]string{{"name": b.cfg.Name, "type": b.profile.Provider, "status": "online", "runtime_mode": "cloud"}},
 	}, &response)
 	if err != nil {
 		return err
 	}
-	if len(response.Runtimes) != 1 || response.Runtimes[0].ID == "" || response.Runtimes[0].Provider != Provider {
+	if len(response.Runtimes) != 1 || response.Runtimes[0].ID == "" || response.Runtimes[0].Provider != b.profile.Provider {
 		return fmt.Errorf("invalid runtime registration response")
 	}
 	if len(b.state.Runs) > 0 && b.state.RuntimeID != "" && b.state.RuntimeID != response.Runtimes[0].ID {
@@ -342,7 +350,7 @@ func (b *Bridge) stepRun(ctx context.Context, r *run) error {
 			}
 		}
 		if time.Now().After(r.Deadline) || (!r.SubmissionDeadline.IsZero() && !r.Started && time.Now().After(r.SubmissionDeadline)) {
-			return b.rejectWithCleanup(ctx, r, "Claude execution deadline exceeded")
+			return b.rejectWithCleanup(ctx, r, b.profile.DisplayName+" execution deadline exceeded")
 		}
 	}
 	var status struct {
@@ -357,6 +365,11 @@ func (b *Bridge) stepRun(ctx context.Context, r *run) error {
 		// Do not leave remote work running after deletion, cancellation or server-side timeout.
 		if r.Phase != "final" {
 			if err := b.cleanupRemote(ctx, r); err != nil {
+				return err
+			}
+		}
+		if err == nil {
+			if err := b.reportUsage(ctx, r); err != nil {
 				return err
 			}
 		}
@@ -381,7 +394,7 @@ func (b *Bridge) stepRun(ctx context.Context, r *run) error {
 		if err != nil {
 			if definitelyRejected(err) {
 				b.logPossibleSession(ctx, r, err)
-				return b.reject(ctx, r, "Claude rejected the session lookup after an unconfirmed create: "+err.Error())
+				return b.reject(ctx, r, b.profile.DisplayName+" rejected the session lookup after an unconfirmed create: "+err.Error())
 			}
 			r.RetryAt = time.Now().Add(retryDelay(err))
 			if perr := b.persist(); perr != nil {
@@ -394,7 +407,7 @@ func (b *Bridge) stepRun(ctx context.Context, r *run) error {
 			r.SessionID = sessionID
 			r.Phase, r.Started = "running", true
 		case r.CreateRetried:
-			return b.reject(ctx, r, "Claude session creation was not confirmed; inspect remote sessions before retrying")
+			return b.reject(ctx, r, b.profile.DisplayName+" session creation was not confirmed; inspect remote sessions before retrying")
 		default:
 			r.CreateRetried = true
 			r.Phase = "prepared"
@@ -459,12 +472,13 @@ func (b *Bridge) stepRun(ctx context.Context, r *run) error {
 				// The earlier session can no longer take messages; a definite
 				// rejection means nothing was delivered, so start a fresh session.
 				r.SessionID, r.PriorSessionID, r.Continued = "", "", false
+				r.UsageBase, r.UsageReported = sessionUsage{}, false
 				r.Phase = "prepared"
 				r.SubmissionDeadline = time.Time{}
 				return b.persist()
 			}
 			if definitelyRejected(err) {
-				return b.reject(ctx, r, "Claude rejected the task message: "+err.Error())
+				return b.reject(ctx, r, b.profile.DisplayName+" rejected the task message: "+err.Error())
 			}
 			return err
 		}
@@ -489,6 +503,7 @@ func (b *Bridge) createSession(ctx context.Context, r *run, resources []map[stri
 	var session struct {
 		ID string `json:"id"`
 	}
+	r.UsageBase, r.UsageReported = sessionUsage{}, false
 	r.Phase = "creating"
 	if r.CreateAttemptAt.IsZero() {
 		r.CreateAttemptAt = time.Now()
@@ -508,12 +523,12 @@ func (b *Bridge) createSession(ctx context.Context, r *run, resources []map[stri
 			return b.persist()
 		}
 		if definitelyRejected(err) {
-			return b.reject(ctx, r, "Claude rejected session creation: "+err.Error())
+			return b.reject(ctx, r, b.profile.DisplayName+" rejected session creation: "+err.Error())
 		}
 		return err
 	}
 	if session.ID == "" {
-		return fmt.Errorf("Claude create returned no session ID")
+		return fmt.Errorf("%s create returned no session ID", b.profile.DisplayName)
 	}
 	// The prompt went out as the session's initial event, so the run has
 	// started; its whole history belongs to this run.
@@ -565,7 +580,7 @@ func (b *Bridge) findCreatedSession(ctx context.Context, agentID, taskID string,
 	}
 	// Treat a truncated listing as not found, so the single retry or the
 	// unconfirmed-creation failure applies instead of retrying the lookup forever.
-	b.log.WarnContext(ctx, "Claude session lookup reached its page limit; treating the unconfirmed create as not found", "task_id", taskID, "agent_id", agentID, "pages", maxCreateLookupPages)
+	b.log.WarnContext(ctx, b.profile.DisplayName+" session lookup reached its page limit; treating the unconfirmed create as not found", "task_id", taskID, "agent_id", agentID, "pages", maxCreateLookupPages)
 	return "", nil
 }
 
@@ -632,6 +647,7 @@ func (b *Bridge) continueSession(ctx context.Context, r *run, fingerprint string
 		Agent         json.RawMessage   `json:"agent"`
 		EnvironmentID string            `json:"environment_id"`
 		Metadata      map[string]string `json:"metadata"`
+		Usage         *sessionUsage     `json:"usage"`
 	}
 	if err := b.anthropic.call(ctx, http.MethodGet, "/sessions/"+url.PathEscape(r.PriorSessionID), nil, &s); err != nil {
 		if definitelyRejected(err) {
@@ -645,7 +661,18 @@ func (b *Bridge) continueSession(ctx context.Context, r *run, fingerprint string
 	if id := sessionAgentID(s.Agent); (id != "" && id != r.AgentID) || (s.EnvironmentID != "" && s.EnvironmentID != b.cfg.EnvironmentID) {
 		return false, nil
 	}
-	return s.Metadata[resourcesMetadataKey] == fingerprint, nil
+	if s.Metadata[resourcesMetadataKey] != fingerprint {
+		return false, nil
+	}
+	if b.profile.Usage == UsageSession {
+		if s.Usage != nil {
+			r.UsageBase = *s.Usage
+		} else {
+			r.UsageBase = sessionUsage{}
+		}
+		r.UsageReported = false
+	}
+	return true, nil
 }
 
 // sessionAgentID accepts the agent as a bare ID or as an object with an id.
@@ -708,7 +735,7 @@ func (b *Bridge) cancelSession(ctx context.Context, sessionID string) error {
 		stopped, err := b.sessionStopped(ctx, path)
 		if err != nil {
 			if ctx.Err() != nil {
-				return fmt.Errorf("waiting for Claude cancellation")
+				return fmt.Errorf("waiting for %s cancellation", b.profile.DisplayName)
 			}
 			return err
 		}
@@ -717,7 +744,7 @@ func (b *Bridge) cancelSession(ctx context.Context, sessionID string) error {
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("waiting for Claude cancellation")
+			return fmt.Errorf("waiting for %s cancellation", b.profile.DisplayName)
 		case <-time.After(cancelConfirmPoll):
 		}
 	}
@@ -746,6 +773,9 @@ func ignoreMissing(err error) error {
 	return err
 }
 func (b *Bridge) deliver(ctx context.Context, r *run) error {
+	if err := b.reportUsage(ctx, r); err != nil {
+		return err
+	}
 	body := map[string]any{"session_id": r.SessionID}
 	suffix := "/complete"
 	if r.Outcome == "completed" {
@@ -753,7 +783,7 @@ func (b *Bridge) deliver(ctx context.Context, r *run) error {
 	} else {
 		suffix = "/fail"
 		body["error"] = r.Failure
-		body["failure_reason"] = "claude_managed_execution"
+		body["failure_reason"] = b.profile.FailureReason
 	}
 	if err := b.taskCall(ctx, r, suffix, body, nil); err != nil {
 		return err
@@ -853,7 +883,7 @@ func cleanupError(err error) error {
 }
 
 func (b *Bridge) logPossibleSession(ctx context.Context, r *run, err error) {
-	b.log.WarnContext(ctx, "Claude session lookup failed; a remote session may exist for this task and must be inspected manually", "task_id", r.TaskID, "agent_id", r.AgentID, "error", err)
+	b.log.WarnContext(ctx, b.profile.DisplayName+" session lookup failed; a remote session may exist for this task and must be inspected manually", "task_id", r.TaskID, "agent_id", r.AgentID, "error", err)
 }
 
 func (b *Bridge) reject(ctx context.Context, r *run, reason string) error {
@@ -872,12 +902,20 @@ func (b *Bridge) Check(ctx context.Context) error {
 		api            *api
 		path, id, name string
 	}
+	environmentPath := "/environments/" + url.PathEscape(b.cfg.EnvironmentID)
+	if b.profile.BetaQuery {
+		environmentPath += "?beta=true"
+	}
 	resources := []checked{
 		{b.multica, "/api/workspaces/" + url.PathEscape(b.cfg.WorkspaceID), b.cfg.WorkspaceID, "Multica workspace"},
-		{b.anthropic, "/environments/" + url.PathEscape(b.cfg.EnvironmentID), b.cfg.EnvironmentID, "Claude environment"},
+		{b.anthropic, environmentPath, b.cfg.EnvironmentID, b.profile.DisplayName + " environment"},
 	}
 	for _, id := range b.cfg.VaultIDs {
-		resources = append(resources, checked{b.anthropic, "/vaults/" + url.PathEscape(id), id, "Claude vault " + id})
+		vaultPath := "/vaults/" + url.PathEscape(id)
+		if b.profile.BetaQuery {
+			vaultPath += "?beta=true"
+		}
+		resources = append(resources, checked{b.anthropic, vaultPath, id, b.profile.DisplayName + " vault " + id})
 	}
 	for _, resource := range resources {
 		if resource.api == b.multica && strings.HasPrefix(b.cfg.MulticaToken, "mdt_") {
@@ -961,22 +999,32 @@ func Binding(multicaURL, workspaceID, anthropicURL, environmentID string) string
 // CancelRemoteSession is used by the managed supervisor after user access is
 // revoked. It needs only Anthropic credentials, never a former owner's Multica PAT.
 func CancelRemoteSession(ctx context.Context, baseURL, token, sessionID string) error {
-	api, err := newAnthropicAPI(baseURL, token)
+	return CancelRemoteSessionWithProfile(ctx, baseURL, token, sessionID, ClaudeProfile())
+}
+
+func CancelRemoteSessionWithProfile(ctx context.Context, baseURL, token, sessionID string, profile Profile) error {
+	profile = normalizeProfile(profile)
+	api, err := newAnthropicAPI(baseURL, token, profile)
 	if err != nil {
 		return err
 	}
-	b := &Bridge{anthropic: api}
+	b := &Bridge{anthropic: api, profile: profile}
 	return cleanupError(b.cancelSession(ctx, sessionID))
 }
 
 // CancelUnconfirmedSession stops the session an unconfirmed create may have
 // made for a task. It succeeds when the lookup finds no session.
 func CancelUnconfirmedSession(ctx context.Context, baseURL, token, workspaceID, agentID, taskID string, attemptAt time.Time) error {
-	api, err := newAnthropicAPI(baseURL, token)
+	return CancelUnconfirmedSessionWithProfile(ctx, baseURL, token, workspaceID, agentID, taskID, attemptAt, ClaudeProfile())
+}
+
+func CancelUnconfirmedSessionWithProfile(ctx context.Context, baseURL, token, workspaceID, agentID, taskID string, attemptAt time.Time, profile Profile) error {
+	profile = normalizeProfile(profile)
+	api, err := newAnthropicAPI(baseURL, token, profile)
 	if err != nil {
 		return err
 	}
-	b := &Bridge{anthropic: api, cfg: Config{WorkspaceID: workspaceID}, log: slog.Default()}
+	b := &Bridge{anthropic: api, profile: profile, cfg: Config{WorkspaceID: workspaceID}, log: slog.Default()}
 	id, err := b.findCreatedSession(ctx, agentID, taskID, attemptAt)
 	if err != nil || id == "" {
 		return cleanupError(err)

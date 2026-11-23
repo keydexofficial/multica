@@ -16,6 +16,8 @@ import { canAssignAgentToIssue } from "@multica/core/permissions";
 import { issueDetailOptions } from "@multica/core/issues/queries";
 import { useSidebarTreeStore } from "@multica/core/issues/stores/sidebar-tree-store";
 import { useCurrentWorkspace, useWorkspacePaths, issueRouteRef } from "@multica/core/paths";
+import { isManagedClaudeRuntime } from "@multica/core/runtimes/claude-managed";
+import { isManagedOMARuntime } from "@multica/core/runtimes/oma";
 import { runtimeListOptions } from "@multica/core/runtimes/queries";
 import { memberListOptions, skillListOptions, squadListOptions } from "@multica/core/workspace/queries";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
@@ -303,7 +305,13 @@ export function TeamPanel() {
   const appsAvailable = useComposioAvailable();
   const machineCounts = useMemo(() => {
     const machines = buildRuntimeMachines(runtimes, { now: Date.now() }).filter(
-      (machine) => !machine.runtimes.every((runtime) => runtime.provider === "qoder_cloud"),
+      (machine) =>
+        !machine.runtimes.every(
+          (runtime) =>
+            runtime.provider === "qoder_cloud" ||
+            isManagedClaudeRuntime(runtime) ||
+            isManagedOMARuntime(runtime),
+        ),
     );
     return runtimeMachineCounts(machines);
   }, [runtimes]);

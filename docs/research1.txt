@@ -1,0 +1,135 @@
+⏺ 已完整读完 PR1 的 125 个改动文件（Go/TS 代码逐文件读，测试读用例与断言，docs/locales 浏览）。以下是阅读结果与对 OMA 的直接影响。
+
+  一、PR1 改动的整体结构
+
+  125 个文件，约 +11,000 行，分五层：
+
+  ┌─────────────┬─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┬────────────────────────────────────────────┐
+  │     层      │                                                                                    文件                                                                                     │                    作用                    │
+  ├─────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────────┤
+  │ 桥接核心    │ server/internal/claudemanagedruntime/*（9 个源文件 + 6 个 testdata）                                                                                                        │ 真正的 Anthropic Managed Agents 协议适配   │
+  ├─────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────────┤
+  │ 连接/生命周 │ server/internal/handler/claude_connection.go(631)、claude_disconnect.go(397)                                                                                                │ 设置 CRUD、supervisor、stop/resume/disconn │
+  │ 期          │                                                                                                                                                                             │ ect/cleanup                                │
+  ├─────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────────┤
+  │ provider    │ middleware/managed_daemon.go、handler/qoder_catalog.go、daemon.go、agent.go、chat.go、issue.go、runtime.go、workspace.go、qoder_connection.go、qoder_disconnect.go、service │ 把写死的 qoder_cloud 改成多 provider       │
+  │ 泛化        │ /qoder_issue_lifecycle.go + SQL                                                                                                                                             │                                            │
+  ├─────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────────┤
+  │ 独立进程    │ server/cmd/claude-managed-runtime/*                                                                                                                                         │ 可选的 standalone bridge                   │
+  ├─────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────────┤
+  │ 前端        │ packages/core/runtimes/claude-managed*、packages/views/runtimes/components/claude-managed-page.tsx(808)、agents 各组件、locales、docs                                       │ 连接页、运行时列表、agent 绑定             │
+  └─────────────┴─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┴────────────────────────────────────────────┘
+
+  二、桥接核心（claudemanagedruntime）
+
+  这是我读得最细的部分，它的设计与 OMA 高度同构：
+
+  协议层（http.go）
+  - DefaultAnthropicURL = https://api.anthropic.com/v1（:19），固定 anthropic-version + anthropic-beta: managed-agents-2026-04-01（:93），Authorization: Bearer。
+  - newClient 只允许 HTTPS，loopback 例外（:96-102）。
+  - 错误体只用于探测 "需要 workspace-scoped key"（:43-54），从不回显 body。
+  - 有 Retry-After 解析与 429 退避。
+
+  会话流程（bridge.go）
+  - createSession 把 prompt 作为 initial_events 一次提交（:500），成功即 running + Started。
+  - 歧义创建恢复：findCreatedSession 用 GET /sessions?agent_id=&created_at[gte]=&order=desc&page= 按 multica_task_id 匹配（:538-568），最多 10 页；找不到且已重试过一次则失败。
+  - 提交歧义不重发：先写 sending 意图（:443-448），deadline 后只报"需人工检查"。
+  - 续用：continueSession 要求 prior session idle、agent/environment 一致、资源指纹一致、无其他 run 占用（:650-680）。
+  - 取消：Anthropic 无 cancel，user.interrupt + 轮询 idle/terminated，最多 3 秒（:688-735）；未完成的清理进入 durable queue。
+  - 清理：Unresolved 记录"可能已创建但查不到"的会话，跨重启保留；resolveUnresolved 每 tick 重试（:817-846）；ErrCleanupUnauthorized 会终止 supervisor 并置 error。
+  - 交付：/complete 带 output，/fail 带 error + failure_reason="claude_managed_execution"（:772-790）。
+  - 没有 usage、chat、leader、quickcreate、reply files、attachments。
+
+  事件映射（events.go）
+  - 轮询 page 游标 + created_at[gte] 回退；用 processed_at 处理同时间戳事件；queued 事件不推进游标（:44-77）。
+  - 映射：agent.message→text、agent.tool_use/mcp_tool_use→tool_use、agent.tool_result/mcp_tool_result→tool_result、session.error、session.status_idle（end_turn=成功，其余=failed）、session.status_terminated/deleted（:107-150）。
+  - 每条消息带 seq + idempotency_key = "claude:"+eventID。
+
+  Prompt/资源（prompt.go）
+  - 只支持 issue run；拒绝 chat/leader/attachments/本地目录/skills/custom env/args/mcp/model（:18-33）。
+  - 资源：只允许 HTTPS github.com、单仓库、branch checkout（:88、:151-166）；authorization_token 只存在于请求副本，不写 journal（credentials.go）。
+  - 要求分支名包含 issue identifier，便于 Multica GitHub 集成回链（BranchName）。
+
+  状态（state.go）
+  - journal 含 runs/cleanup/unresolved；严格 phase 校验；原子写 + 文件锁；不存凭据。
+
+  目录（catalog.go）
+  - 校验 agent_/env_ 前缀，分页最多 10 页，只返回 id/name。
+
+  测试：约 40 个场景，覆盖歧义提交/创建、重启恢复、取消、限流、并发、续用指纹、vault、工具调用 ID、journal 持久化、目录分页、错误脱敏。local_integration_test.go 用真实 Multica router + 假 Anthropic HTTP 服务端，端到端建
+  runtime/agent/issue。这套测试骨架几乎可以原样给 OMA 用。
+
+  三、连接层与 supervisor（claude_connection.go / claude_disconnect.go）
+
+  - 每个 workspace 一条 cloud_agent_connection（provider=claude_managed），配置加密，含 AnthropicToken/GitHubTokens/VaultIDs/MulticaToken。
+  - 服务端 supervisor：pg_try_advisory_lock(71243, 8192) 选主；每 5 秒对账 revision；busy_until + acquireClaudeStep 串行化每个 tick；token 每小时续期，owner 降级/停用即吊销。
+  - 启动时构造 claudemanagedruntime.Config，journal 存 DB 加密列；OnReady 把 runtime 设为 public 并置 online。
+  - 连接页操作：save（保持暂停）、resume、check、stop、disconnect。disconnect 顺序：停桥 → 取消远端会话 → teardown runtime → 解绑 agents → 删连接。
+  - 关键细节：Anthropic base URL 被写死。CheckClaudeConnection、ListClaudeAgents、cleanupClaudeJournal 都直接用 DefaultAnthropicURL（claude_connection.go:22-25 注释明确"base 固定"）。这是 OMA 必须改的第一处。
+  - 设置输入校验 env_ 前缀、并发 1-10、超时 5-240 分钟。
+  - PR1 已实现评审 P1：未决创建在取消/断开后仍保留，直到 lookup 成功。
+
+  四、provider 泛化（这部分是 OMA 的直接模板）
+
+  - middleware/managed_daemon.go：managedDaemonPrefixes 映射前缀→provider，新增 provider 只需加一行。
+  - daemon.go：isQoderManagedDaemonID→isManagedDaemonID（查前缀表），注册校验按 ManagedDaemonProvider 期望 provider。
+  - qoder_catalog.go：isCloudAgentProvider、cloudAgentServiceName、validateCloudAgentConfig、qoderOverrides.validate(provider) 全部改成按 provider 分支。
+  - agent.go/chat.go/issue.go/runtime.go/workspace.go：去掉 == "qoder_cloud" 的写死判断。
+  - service/qoder_issue_lifecycle.go + SQL：LockQoderTaskIssue 改为 SELECT sqlc.embed(i), r.provider，provider 条件 IN ('qoder_cloud','claude_managed')；活动日志 source 用真实 provider。这是写死列表，新增 OMA 必须改 SQL + 重新生成 sqlc。
+  - workspace.go 删除 workspace 时同样写死 IN ('qoder_cloud','claude_managed')。
+
+  五、前端
+
+  - packages/core/runtimes/claude-managed.ts：query keys、hooks、isManagedClaudeRuntime（按 daemon_id === claude-managed-<ws> 区分托管 runtime 与 standalone bridge）。
+  - claude-managed-schema.ts：zod 解析 + 默认值；测试确认不会把 token 漏到前端。
+  - 运行时列表：runtimes-page.tsx 把 Qoder 行抽象成 kind:"cloud"，新增 Claude 行、Add 菜单、状态/工作量单元格、CLOUD_AGENT_PROVIDERS 集合。
+  - 连接页：claude-managed-page.tsx（表单、环境选择、vaults、仓库 token、并发/超时、pause/resume/disconnect 确认、成员只读）。
+  - agent 侧：ClaudeAgentTab/ClaudeAgentSelect、create 流程 claudeAgentId、draft 序列化、execution controls、properties/inspector、skills/chat/quick-create 的隐藏与拒绝。
+  - provider-logo、display.ts、locale keys、docs（5 种语言）。
+
+  六、对 OMA 的精确改造清单（读完后的结论）
+
+  桥接包：复制 claudemanagedruntime → omamanagedruntime，改动点很小且集中：
+
+  1. Provider = "oma_cloud"；DefaultOMAURL 改为可配置，并允许内网 HTTP（自托管常见）。
+  2. 去掉 requiresWorkspaceHeader（Anthropic 专用错误探测）。
+  3. header 仍用 anthropic-version/anthropic-beta（OMA 要求一致），token 字段改名 OMAToken。
+  4. failure_reason 改 oma_cloud_execution；standalone 前缀 oma-bridge-。
+  5. 新增 usage.go：从 qoderruntime/usage.go 移植 /usage 上报（OMA 有 usage，PR1 明确未实现计费）。
+  6. 可选补 agent.custom_tool_use 事件映射（PR1 只映射了 agent.tool_use/mcp_tool_use）。
+  7. repositoryResource 的 github.com/branch-only/单仓库限制可先保留，后续再放宽到 commit/多仓库。
+
+  Handler：
+  - 复制 claude_connection.go/claude_disconnect.go → oma_*.go，但必须增加 BaseURL 到 claudeSettings/view/input，并把 CheckAccess/ListCatalog/CancelRemoteSession/supervisor/standalone main.go 全部改为使用配置的 base URL。
+  - lock seed 用新值（如 24），provider SQL 改 oma_cloud，daemon 前缀 oma-managed-，环境前缀仍 env_，vault 仍 vlt_。
+  - qoder_catalog.go 增加 OMA 的 isCloudAgentProvider/cloudAgentServiceName/validateCloudAgentConfig 分支。
+  - chat.go、issue.go、quick-create 的"issue-only"拒绝要覆盖 OMA。
+  - qoder_issue_lifecycle.sql、workspace.go 的 provider 列表加 oma_cloud（或直接改成"所有 cloud provider"）。
+  - middleware/managed_daemon.go 加 "oma-managed-": "oma_cloud"。
+  - cmd/server/main.go 启 RunOMAConnections，router.go 加 /oma 路由。
+
+  前端：复制 Claude 的 runtime module/schema/page/tab/select，加 OMA_PROVIDER；所有 provider === "claude_managed" 的分支改为"cloud provider"判断，否则会出现第四份复制。
+
+  七、必须先解决的 PR1 结构性问题
+
+  这是读完代码后最值得强调的：
+
+  1. 连接/监督/断开层是复制粘贴：claude_connection.go 与 qoder_connection.go 相似度约 67%，claude_disconnect.go 与 qoder 版约 42%，bridge.go 约 52%。再加 OMA 就是第三份。建议在 OMA 之前先抽 cloudagent 通用连接层 + provider
+  descriptor（settings 结构、SQL 条件、bridge 构造、prefix、服务名、能力位），三个 provider 只提供描述符。否则重复代码门禁（3.75%）和后续维护都会恶化。
+  2. Anthropic base URL 写死在 handler，与 standalone 可配置的行为不一致；OMA 必须把它变成连接配置的一部分。
+  3. provider 列表散落在 SQL 与前端常量中（IN ('qoder_cloud','claude_managed')、CLOUD_AGENT_PROVIDERS、多处 === "claude_managed"），这是 OMA 最容易漏改的地方。
+  4. 没有 usage 上报；PR1 README 的 Known limits 明确列出。OMA 需要补，且要处理续用会话的基线，避免重复计费。
+  5. 能力位靠 if/else：chat/quick-create/skills/attachments/tool approval 都是零散判断。建议在 provider descriptor 里定义 capabilities，前后端共用。
+
+  八、建议的下一步
+
+  1. 先做一次"cloud provider 通用化"重构（基于 PR1 分支），把 connection/supervisor/disconnect/catalog 参数化。
+  2. 再复制 claudemanagedruntime → omamanagedruntime，按上面 7 点改；保留 PR1 的全部测试骨架，替换 testdata 为 OMA 录制的响应。
+  3. 最后接前端与 lifecycle SQL，跑 just lint / just test / just duplicates / just complexity，并按仓库要求同步 docs/design/。
+
+  我已经掌握了 PR1 的完整实现。如果你确认，我可以直接开始第一步：把 provider 描述符和 OMA 桥接包的改造拆成可执行的提交计划。
+
+✻ Crunched for 2m 58s
+
+❯ 我准备维护一份我们内部的multica 代码，但 又想经常把 https://github.com/multica-ai/multica main分支的代码同步过来。现在处于一个尴尬的地方，pr1 还没merge到multica
+的main分支去，但我认为应该短期内就会merge进去。针对这样的情况，你觉得我们现在该怎么做呢？

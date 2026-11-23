@@ -33,6 +33,7 @@ import { ThinkingSettingField } from "../components/inspector/thinking-prop-row"
 import { ModelDropdown } from "../components/model-dropdown";
 import { QoderAgentSelect } from "../components/qoder-agent-select";
 import { ClaudeAgentSelect } from "../components/claude-agent-select";
+import { OMAAgentSelect } from "../components/oma-agent-select";
 import { RuntimePicker } from "../components/runtime-picker";
 import { SkillMultiSelect } from "../components/skill-multi-select";
 import { ConversationStartersEditor } from "../components/conversation-starters-editor";
@@ -106,7 +107,8 @@ export function AgentConfigurationPanel({
   // config, so the fields that would produce them are not offered.
   const qoderRuntime = selectedRuntime?.provider === "qoder_cloud";
   const claudeRuntime = selectedRuntime?.provider === "claude_managed";
-  const cloudRuntime = qoderRuntime || claudeRuntime;
+  const omaRuntime = selectedRuntime?.provider === "oma_cloud";
+  const cloudRuntime = qoderRuntime || claudeRuntime || omaRuntime;
   const handleRuntimeSelect = (id: string) => {
     if (id === draft.runtimeId) return;
     if (onRuntimeSelect) {
@@ -175,7 +177,7 @@ export function AgentConfigurationPanel({
               />
             </div>
           </DraftFieldRow>
-          {conversationStartersSupported && !claudeRuntime ? (
+          {conversationStartersSupported && !claudeRuntime && !omaRuntime ? (
             <DraftFieldRow
               compact={compact}
               align="start"
@@ -269,6 +271,12 @@ export function AgentConfigurationPanel({
               <ClaudeAgentSelect
                 value={draft.claudeAgentId}
                 onChange={(value) => set("claudeAgentId", value)}
+                disabled={runtimeLocked}
+              />
+            ) : omaRuntime ? (
+              <OMAAgentSelect
+                value={draft.omaAgentId}
+                onChange={(value) => set("omaAgentId", value)}
                 disabled={runtimeLocked}
               />
             ) : (

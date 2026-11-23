@@ -46,6 +46,7 @@ import {
 import type { AgentRuntime, MemberWithUser } from "@multica/core/types";
 import type { QoderConnection } from "@multica/core/runtimes/qoder";
 import type { ClaudeConnection } from "@multica/core/runtimes/claude-managed";
+import type { OMAConnection } from "@multica/core/runtimes/oma";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Button, buttonVariants } from "@multica/ui/components/ui/button";
 import {
@@ -91,11 +92,19 @@ import {
   claudeManagedOptions,
   isManagedClaudeRuntime,
 } from "@multica/core/runtimes/claude-managed";
+import {
+  isManagedOMARuntime,
+  omaManagedOptions,
+} from "@multica/core/runtimes/oma";
 import { QODER_RUNTIME_LOCATOR } from "./qoder-detail-page";
 import {
   CLAUDE_MANAGED_LOCATOR,
   ClaudeConnectDialog,
 } from "./claude-managed-page";
+import {
+  OMA_MANAGED_LOCATOR,
+  OMAConnectDialog,
+} from "./oma-managed-page";
 import { RemoteRuntimeDialog } from "./remote-runtime-dialog";
 import { ConnectRemoteDialog } from "./connect-remote-dialog";
 import { CloudRuntimeDialog } from "./cloud-runtime-dialog";
@@ -163,7 +172,7 @@ type CloudConnection = Pick<
 >;
 
 // Cloud agent bridges run issues only, so they cannot host Mika's chat.
-const CLOUD_AGENT_PROVIDERS = new Set(["qoder_cloud", "claude_managed"]);
+const CLOUD_AGENT_PROVIDERS = new Set(["qoder_cloud", "claude_managed", "oma_cloud"]);
 
 type QoderStatus = "stopped" | "online" | "error" | "offline" | "starting";
 
@@ -217,9 +226,13 @@ export function RuntimesPage({
   const { data: claudeConnection, isLoading: claudeLoading } = useQuery(
     claudeManagedOptions(wsId),
   );
+  const { data: omaConnection, isLoading: omaLoading } = useQuery(
+    omaManagedOptions(wsId),
+  );
   const navigation = useNavigation();
   const [qoderDialogOpen, setQoderDialogOpen] = useState(false);
   const [claudeDialogOpen, setClaudeDialogOpen] = useState(false);
+  const [omaDialogOpen, setOMADialogOpen] = useState(false);
   const [showConnectDialog, setShowConnectDialog] = useState(false);
   const [showCloudRuntimeDialog, setShowCloudRuntimeDialog] = useState(false);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
@@ -309,7 +322,8 @@ export function RuntimesPage({
       !(
         machine.runtimes.length > 0 &&
         (machine.runtimes.every((runtime) => runtime.provider === "qoder_cloud") ||
-          machine.runtimes.every(isManagedClaudeRuntime))
+          machine.runtimes.every(isManagedClaudeRuntime) ||
+          machine.runtimes.every(isManagedOMARuntime))
       ),
   );
   const qoderAgentCount = agents.filter((agent) =>
@@ -324,6 +338,14 @@ export function RuntimesPage({
     runtimes.some(
       (runtime) =>
         runtime.id === agent.runtime_id && isManagedClaudeRuntime(runtime),
+    ),
+  ).length;
+  const oma = omaConnection ?? null;
+  const omaHref = paths.runtimeDetail(OMA_MANAGED_LOCATOR);
+  const omaAgentCount = agents.filter((agent) =>
+    runtimes.some(
+      (runtime) =>
+        runtime.id === agent.runtime_id && isManagedOMARuntime(runtime),
     ),
   ).length;
   const localMachine = machineList.find((machine) => machine.isCurrent);
@@ -345,6 +367,11 @@ export function RuntimesPage({
     claude !== null &&
     (statusFilter === "all" ||
       (claudeConfigured && matchesStatus(qoderIsOnline(claude))));
+  const omaConfigured = oma?.configured === true;
+  const showOMARow =
+    oma !== null &&
+    (statusFilter === "all" ||
+      (omaConfigured && matchesStatus(qoderIsOnline(oma))));
   // Once the server can run Claude Managed Agents, its real row replaces the placeholder.
   const comingSoonServices = COMING_SOON_SERVICES.filter(
     (service) => !(claude && service.provider === "claude"),
@@ -357,25 +384,32 @@ export function RuntimesPage({
     !listLoading &&
     !qoderLoading &&
     !claudeLoading &&
+    !omaLoading &&
     !filtering &&
     !isDesktop &&
     machineList.length === 0 &&
     !qoderConfigured &&
     !claudeConfigured &&
+    !omaConfigured &&
     orphanProfileRuntimes.length === 0;
   const nothingMatches =
     filtering &&
     visibleMachines.length === 0 &&
     !showQoderRow &&
     !showClaudeRow &&
+    !showOMARow &&
     visibleComingSoon.length === 0;
 
-  const configuredCloudCount = (qoderConfigured ? 1 : 0) + (claudeConfigured ? 1 : 0);
+  const configuredCloudCount =
+    (qoderConfigured ? 1 : 0) +
+    (claudeConfigured ? 1 : 0) +
+    (omaConfigured ? 1 : 0);
   const totalCount = machineList.length + configuredCloudCount;
   const onlineCount =
     machineList.filter((machine) => machine.health === "online").length +
     (qoder && qoderIsOnline(qoder) ? 1 : 0) +
-    (claude && qoderIsOnline(claude) ? 1 : 0);
+    (claude && qoderIsOnline(claude) ? 1 : 0) +
+    (oma && qoderIsOnline(oma) ? 1 : 0);
   const statusCounts: Record<StatusFilter, number> = {
     all: totalCount,
     online: onlineCount,
@@ -392,16 +426,20 @@ export function RuntimesPage({
     qoderConfigured ? navigation.push(qoderHref) : setQoderDialogOpen(true);
   const openClaude = () =>
     claudeConfigured ? navigation.push(claudeHref) : setClaudeDialogOpen(true);
+  const openOMA = () =>
+    omaConfigured ? navigation.push(omaHref) : setOMADialogOpen(true);
   const addMenuProps = {
     isDesktop,
     localMachineName: localMachineName ?? localMachine?.title ?? null,
     qoder,
     claude,
+    oma,
     comingSoon: comingSoonServices,
     cloudRuntimeEnabled,
     onAddMachine: () => setShowConnectDialog(true),
     onQoder: openQoder,
     onClaude: openClaude,
+    onOMA: openOMA,
     onCloudRuntime: () => setShowCloudRuntimeDialog(true),
   };
 
@@ -418,7 +456,9 @@ export function RuntimesPage({
             onConnectCloud={(provider) =>
               provider === "claude_managed"
                 ? setClaudeDialogOpen(true)
-                : setQoderDialogOpen(true)
+                : provider === "oma_cloud"
+                  ? setOMADialogOpen(true)
+                  : setQoderDialogOpen(true)
             }
           />
         ),
@@ -530,6 +570,18 @@ export function RuntimesPage({
       connection: claude,
       agentCount: claudeAgentCount,
       href: claudeHref,
+    });
+  }
+  if (showOMARow && oma) {
+    cloudRows.push({
+      kind: "cloud",
+      id: "oma_cloud",
+      provider: "oma_cloud",
+      title: t(($) => $.oma_managed.cloud_title),
+      vendor: "OMA",
+      connection: oma,
+      agentCount: omaAgentCount,
+      href: omaHref,
     });
   }
   for (const service of visibleComingSoon) {
@@ -653,6 +705,9 @@ export function RuntimesPage({
       {claudeDialogOpen && (
         <ClaudeConnectDialog onClose={() => setClaudeDialogOpen(false)} />
       )}
+      {omaDialogOpen && (
+        <OMAConnectDialog onClose={() => setOMADialogOpen(false)} />
+      )}
       {showConnectDialog && (
         <ConnectRemoteDialog onClose={() => setShowConnectDialog(false)} />
       )}
@@ -668,11 +723,13 @@ function AddRuntimeMenu({
   localMachineName,
   qoder,
   claude,
+  oma,
   comingSoon,
   cloudRuntimeEnabled,
   onAddMachine,
   onQoder,
   onClaude,
+  onOMA,
   onCloudRuntime,
   trigger,
   align = "end",
@@ -681,11 +738,13 @@ function AddRuntimeMenu({
   localMachineName: string | null;
   qoder: QoderConnection | null;
   claude: ClaudeConnection | null;
+  oma: OMAConnection | null;
   comingSoon: typeof COMING_SOON_SERVICES;
   cloudRuntimeEnabled: boolean;
   onAddMachine: () => void;
   onQoder: () => void;
   onClaude: () => void;
+  onOMA: () => void;
   onCloudRuntime: () => void;
   trigger?: ReactElement;
   align?: "start" | "end";
@@ -759,6 +818,19 @@ function AddRuntimeMenu({
                 ) : undefined
               }
               onClick={onClaude}
+            />
+          )}
+          {oma && (
+            <AddMenuItem
+              icon={<ProviderLogo provider="oma_cloud" className="size-4" />}
+              title={t(($) => $.oma_managed.cloud_title)}
+              description={t(($) => $.page.rows.provided_by, { vendor: "OMA" })}
+              trailing={
+                oma.configured ? (
+                  <Check className="size-4 text-muted-foreground" />
+                ) : undefined
+              }
+              onClick={onOMA}
             />
           )}
           {cloudRuntimeEnabled && (
@@ -1000,7 +1072,9 @@ function RuntimeStatusCell({
           >
             {row.provider === "claude_managed"
               ? t(($) => $.claude_managed.status[status])
-              : t(($) => $.qoder[status])}
+              : row.provider === "oma_cloud"
+                ? t(($) => $.oma_managed.status[status])
+                : t(($) => $.qoder[status])}
           </span>
         </>
       );

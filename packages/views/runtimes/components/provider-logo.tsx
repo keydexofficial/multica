@@ -1,5 +1,5 @@
 import { useId } from "react";
-import { Monitor } from "@multica/ui/icons";
+import { Cloud, Monitor } from "@multica/ui/icons";
 import codeartsLogo from "./codearts-logo.svg";
 import qwenLogo from "./qwen-logo.svg";
 import reasonixLogo from "./reasonix-logo.svg";
@@ -440,6 +440,8 @@ export function ProviderLogo({
     case "claude":
     case "claude_managed":
       return <ClaudeLogo className={className} />;
+    case "oma_cloud":
+      return <Cloud className={className} />;
     case "codebuddy":
       return <CodeBuddyLogo className={className} />;
     case "codex":

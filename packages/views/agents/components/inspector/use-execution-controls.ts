@@ -26,14 +26,15 @@ export function useExecutionControls({
   currentUserId: string | null;
   update: (data: Record<string, unknown>) => Promise<void>;
 }) {
-  // A cloud agent (Qoder Cloud Agents, Claude Managed Agents) is bound to an
-  // agent in that service, and the model lives there. Moving between a cloud
-  // runtime and any other runtime would need a different configuration the
-  // server either rejects or the bridge refuses, so neither direction is
-  // offered.
+  // A cloud agent (Qoder Cloud Agents, Claude Managed Agents, OMA Managed
+  // Agents) is bound to an agent in that service, and the model lives there.
+  // Moving between a cloud runtime and any other runtime would need a
+  // different configuration the server either rejects or the bridge refuses,
+  // so neither direction is offered.
   const qoderRuntime = runtime?.provider === "qoder_cloud";
   const claudeRuntime = runtime?.provider === "claude_managed";
-  const cloudRuntime = qoderRuntime || claudeRuntime;
+  const omaRuntime = runtime?.provider === "oma_cloud";
+  const cloudRuntime = qoderRuntime || claudeRuntime || omaRuntime;
   const isOnline = runtime?.status === "online";
   const canReadRuntime =
     runtime != null && isRuntimeUsableForUser(runtime, currentUserId);
@@ -43,7 +44,10 @@ export function useExecutionControls({
       cloudRuntime
         ? runtimes
         : runtimes.filter(
-            (r) => r.provider !== "qoder_cloud" && r.provider !== "claude_managed",
+            (r) =>
+              r.provider !== "qoder_cloud" &&
+              r.provider !== "claude_managed" &&
+              r.provider !== "oma_cloud",
           ),
     [cloudRuntime, runtimes],
   );
@@ -95,6 +99,7 @@ export function useExecutionControls({
   return {
     qoderRuntime,
     claudeRuntime,
+    omaRuntime,
     cloudRuntime,
     canDiscoverRuntimeModels,
     runtimeOptions,

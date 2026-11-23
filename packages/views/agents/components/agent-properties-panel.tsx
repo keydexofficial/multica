@@ -12,6 +12,7 @@ import {
   type AgentPresenceDetail,
   effectiveAccessScope,
   claudeAgentId,
+  omaAgentId,
   qoderAgentId,
   summarizeActivityWindow,
   useWorkspaceActivityMap,
@@ -81,6 +82,7 @@ export function AgentPropertiesPanel({
   const {
     qoderRuntime,
     claudeRuntime,
+    omaRuntime,
     cloudRuntime,
     canDiscoverRuntimeModels,
     runtimeOptions,
@@ -166,6 +168,14 @@ export function AgentPropertiesPanel({
             <Value>
               <span className="truncate font-mono">
                 {claudeAgentId(agent.runtime_config) || "—"}
+              </span>
+            </Value>
+          </ObjectProperty>
+        ) : omaRuntime ? (
+          <ObjectProperty label={tr(($) => $.oma_managed.agent)}>
+            <Value>
+              <span className="truncate font-mono">
+                {omaAgentId(agent.runtime_config) || "—"}
               </span>
             </Value>
           </ObjectProperty>

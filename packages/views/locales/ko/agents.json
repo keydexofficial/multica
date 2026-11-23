@@ -192,7 +192,8 @@
     "rename_required": "이름은 필수입니다",
     "edit_description_title": "설명 수정",
     "description_placeholder": "이 에이전트는 무엇을 하나요?",
-    "cancel": "취소"
+    "cancel": "취소",
+    "oma_execution_note": "모델, 도구, 스킬은 OMA 에이전트에서 설정합니다."
   },
   "overview": {
     "attention_title": "확인이 필요한 실행",
@@ -288,7 +289,8 @@
     "discard_dialog_title": "저장하지 않은 변경사항을 버릴까요?",
     "discard_dialog_description": "이 탭에 저장하지 않은 변경사항이 있습니다. 지금 나가면 변경사항이 사라집니다.",
     "discard_keep": "계속 편집",
-    "discard_confirm": "변경사항 버리기"
+    "discard_confirm": "변경사항 버리기",
+    "oma_agent": "OMA 에이전트"
   },
   "create_dialog": {
     "name_label": "이름",

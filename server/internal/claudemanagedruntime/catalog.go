@@ -17,13 +17,17 @@ type CatalogItem struct {
 
 const maxCatalogPages = 10
 
-// ListCatalog lists the non-archived agents or environments the key can see.
 func ListCatalog(ctx context.Context, baseURL, token, kind string) ([]CatalogItem, error) {
+	return ListCatalogWithProfile(ctx, baseURL, token, kind, ClaudeProfile())
+}
+
+func ListCatalogWithProfile(ctx context.Context, baseURL, token, kind string, profile Profile) ([]CatalogItem, error) {
+	profile = normalizeProfile(profile)
 	prefix := map[string]string{"agents": "agent_", "environments": "env_"}[kind]
 	if prefix == "" {
-		return nil, fmt.Errorf("unknown Claude catalog %q", kind)
+		return nil, fmt.Errorf("unknown %s catalog %q", profile.DisplayName, kind)
 	}
-	a, err := newAnthropicAPI(baseURL, token)
+	a, err := newAnthropicAPI(baseURL, token, profile)
 	if err != nil {
 		return nil, err
 	}
@@ -34,6 +38,9 @@ func ListCatalog(ctx context.Context, baseURL, token, kind string) ([]CatalogIte
 		q := url.Values{"limit": {"100"}}
 		if page != "" {
 			q.Set("page", page)
+		}
+		if kind == "environments" && profile.BetaQuery {
+			q.Set("beta", "true")
 		}
 		var res struct {
 			Data []struct {
@@ -47,11 +54,11 @@ func ListCatalog(ctx context.Context, baseURL, token, kind string) ([]CatalogIte
 			return nil, err
 		}
 		if res.Data == nil {
-			return nil, fmt.Errorf("invalid Claude catalog response")
+			return nil, fmt.Errorf("invalid %s catalog response", profile.DisplayName)
 		}
 		for _, item := range res.Data {
 			if !strings.HasPrefix(item.ID, prefix) {
-				return nil, fmt.Errorf("invalid Claude catalog identity")
+				return nil, fmt.Errorf("invalid %s catalog identity", profile.DisplayName)
 			}
 			if item.ArchivedAt != nil || seen[item.ID] {
 				continue
@@ -67,16 +74,20 @@ func ListCatalog(ctx context.Context, baseURL, token, kind string) ([]CatalogIte
 			return items, nil
 		}
 		if res.NextPage == page {
-			return nil, fmt.Errorf("Claude pagination cursor did not advance")
+			return nil, fmt.Errorf("%s pagination cursor did not advance", profile.DisplayName)
 		}
 		page = res.NextPage
 	}
-	return nil, fmt.Errorf("Claude catalog exceeds %d pages", maxCatalogPages)
+	return nil, fmt.Errorf("%s catalog exceeds %d pages", profile.DisplayName, maxCatalogPages)
 }
 
-// CheckAccess confirms the key can read the environment and every vault.
 func CheckAccess(ctx context.Context, baseURL, token, environmentID string, vaultIDs []string) error {
-	a, err := newAnthropicAPI(baseURL, token)
+	return CheckAccessWithProfile(ctx, baseURL, token, environmentID, vaultIDs, ClaudeProfile())
+}
+
+func CheckAccessWithProfile(ctx context.Context, baseURL, token, environmentID string, vaultIDs []string, profile Profile) error {
+	profile = normalizeProfile(profile)
+	a, err := newAnthropicAPI(baseURL, token, profile)
 	if err != nil {
 		return err
 	}
@@ -88,14 +99,17 @@ func CheckAccess(ctx context.Context, baseURL, token, environmentID string, vaul
 		resources["/vaults/"+url.PathEscape(id)] = id
 	}
 	for path, want := range resources {
+		if profile.BetaQuery {
+			path += "?beta=true"
+		}
 		var res struct {
 			ID string `json:"id"`
 		}
 		if err := a.call(ctx, http.MethodGet, path, nil, &res); err != nil {
-			return fmt.Errorf("Claude access check for %s: %w", want, err)
+			return fmt.Errorf("%s access check for %s: %w", profile.DisplayName, want, err)
 		}
 		if res.ID != want {
-			return fmt.Errorf("Claude access check for %s: unexpected resource identity", want)
+			return fmt.Errorf("%s access check for %s: unexpected resource identity", profile.DisplayName, want)
 		}
 	}
 	return nil

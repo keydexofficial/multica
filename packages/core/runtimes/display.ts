@@ -46,6 +46,7 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   qoderclicn: "Qoder CN",
   qoder_cloud: "Qoder Cloud Agents",
   claude_managed: "Claude Managed Agents",
+  oma_cloud: "OMA Managed Agents",
   traecli: "Trae",
   qwen: "Qwen Code",
   qwenpaw: "QwenPaw",

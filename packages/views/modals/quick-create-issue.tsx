@@ -169,7 +169,9 @@ export function AgentCreatePanel({
           !a.archived_at &&
           isAgentRuntimeBound(a) &&
           !runtimes.some(
-            (r) => r.id === a.runtime_id && r.provider === "claude_managed",
+            (r) =>
+              r.id === a.runtime_id &&
+              (r.provider === "claude_managed" || r.provider === "oma_cloud"),
           ) &&
           canAssignAgent(a, userId, memberRole),
       ),
@@ -358,11 +360,13 @@ export function AgentCreatePanel({
   // can't pre-check, defer to the server's authoritative gate
   // (checkQuickCreateDaemonVersion, which reads the row by id regardless of
   // role) instead of failing closed in the UI.
-  // Qoder Cloud Agents runs through the managed bridge, which has no CLI.
+  // Cloud agents run through the managed bridge, which has no CLI.
   const canPrecheckVersion =
     selectedAgent?.runtime_id != null &&
     selectedRuntime != null &&
-    selectedRuntime.provider !== "qoder_cloud";
+    selectedRuntime.provider !== "qoder_cloud" &&
+    selectedRuntime.provider !== "claude_managed" &&
+    selectedRuntime.provider !== "oma_cloud";
   const runtimeCliVersion = readRuntimeCliVersion(selectedRuntime?.metadata);
   const baseVersionCheck = useMemo(
     () => checkQuickCreateCliVersion(runtimeCliVersion),
@@ -407,12 +411,15 @@ export function AgentCreatePanel({
     dismissStorageRefusal,
   } = useIssueCreateUploads("agent", uploadGate, editorRef);
   const [storageCopyRefusal, setStorageCopyRefusal] = useState<StorageLimitRefusal | null>(null);
-  // The Qoder bridge cannot read attachments, so the issue it creates would be
-  // assigned to an agent whose run fails immediately. Block instead of
-  // silently dropping the attachment; the server re-checks.
-  const qoderAttachmentBlocked =
-    selectedRuntime?.provider === "qoder_cloud" &&
-    pendingAttachments.some((a) => contentReferencesAttachment(draft.agent.prompt, a));
+  // Cloud agent bridges cannot read attachments, so the issue they create
+  // would be assigned to an agent whose run fails immediately. Block instead
+  // of silently dropping the attachment; the server re-checks.
+  const managedAttachmentBlocked =
+    (selectedRuntime?.provider === "qoder_cloud" ||
+      selectedRuntime?.provider === "oma_cloud") &&
+    pendingAttachments.some((a) =>
+      contentReferencesAttachment(draft.agent.prompt, a),
+    );
   const { isDragOver, dropZoneProps } = useFileDropZone({
     onDrop: (files) => files.forEach((f) => editorRef.current?.uploadFile(f)),
   });
@@ -453,8 +460,11 @@ export function AgentCreatePanel({
       // ⌘+Enter path bypasses it — re-guard here and keep the draft in place.
       if (!actor || versionBlocked || (anchorCommentId && !sourcePreview)) return false;
       if (
-        selectedRuntime?.provider === "qoder_cloud" &&
-        pendingAttachments.some((a) => contentReferencesAttachment(md, a))
+        (selectedRuntime?.provider === "qoder_cloud" ||
+          selectedRuntime?.provider === "oma_cloud") &&
+        pendingAttachments.some((a) =>
+          contentReferencesAttachment(md, a),
+        )
       ) {
         return false;
       }
@@ -606,7 +616,7 @@ export function AgentCreatePanel({
     void composer.submit();
   };
   const submitting = composer.submitting;
-  const canCreate = !!actor && !versionBlocked && !qoderAttachmentBlocked && !(anchorCommentId && !sourcePreview);
+  const canCreate = !!actor && !versionBlocked && !managedAttachmentBlocked && !(anchorCommentId && !sourcePreview);
   const voice = useComposerVoice({
     insert: (text) => editorRef.current?.insertText(text) ?? false,
     submit: canCreate ? submit : undefined,
@@ -659,7 +669,7 @@ export function AgentCreatePanel({
     <Button
       size="sm"
       onClick={submit}
-      disabled={!hasContent || !actor || submitting || versionBlocked || qoderAttachmentBlocked || gate.uploading || (!!anchorCommentId && !sourcePreview)}
+      disabled={!hasContent || !actor || submitting || versionBlocked || managedAttachmentBlocked || gate.uploading || (!!anchorCommentId && !sourcePreview)}
       aria-disabled={gate.uploading || versionBlocked || undefined}
       // Sending is a busy state too, not just uploading.
       aria-busy={gate.uploading || submitting || undefined}
@@ -769,9 +779,9 @@ export function AgentCreatePanel({
           </div>
         )}
 
-        {selectedAgent && qoderAttachmentBlocked && (
+        {selectedAgent && managedAttachmentBlocked && (
           <div className="mx-5 mb-2 shrink-0 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-caption text-amber-700 dark:text-amber-300">
-            {t(($) => $.create_issue.agent.qoder_attachments_unsupported)}
+            {t(($) => $.create_issue.agent.cloud_attachments_unsupported)}
           </div>
         )}
 

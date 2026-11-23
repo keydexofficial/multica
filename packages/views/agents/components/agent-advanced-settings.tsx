@@ -30,6 +30,7 @@ import { McpConfigTab } from "./tabs/mcp-config-tab";
 import { AgentAppsTab } from "./tabs/agent-apps-tab";
 import { QoderAgentTab } from "./tabs/qoder-agent-tab";
 import { ClaudeAgentTab } from "./tabs/claude-agent-tab";
+import { OMAAgentTab } from "./tabs/oma-agent-tab";
 import { RuntimeConfigTab } from "./tabs/runtime-config-tab";
 import { AgentDetailInspector } from "./agent-detail-inspector";
 import { AgentAccessSettings } from "./agent-access-settings";
@@ -53,6 +54,7 @@ type SectionLabelKey =
   | "runtime_config"
   | "qoder_agent"
   | "claude_agent"
+  | "oma_agent"
   | "skills"
   | "mcp_config"
   | "composio_mcp";
@@ -122,9 +124,10 @@ export function AgentAdvancedSettings({
   );
 
   const qoderRuntime = runtime?.provider === "qoder_cloud";
-  // Claude Managed Agents refuses the same overrides; the Claude agent owns them.
+  // Cloud agent runtimes refuse the same overrides; the remote agent owns them.
   const claudeRuntime = runtime?.provider === "claude_managed";
-  const cloudRuntime = qoderRuntime || claudeRuntime;
+  const omaRuntime = runtime?.provider === "oma_cloud";
+  const cloudRuntime = qoderRuntime || claudeRuntime || omaRuntime;
 
   const settingsSections = useMemo(
     () =>
@@ -144,11 +147,13 @@ export function AgentAdvancedSettings({
               ...item,
               labelKey: qoderRuntime
                 ? ("qoder_agent" as const)
-                : ("claude_agent" as const),
+                : claudeRuntime
+                  ? ("claude_agent" as const)
+                  : ("oma_agent" as const),
             }
           : item,
       ),
-    [canEdit, cloudRuntime, qoderRuntime, runtime?.provider],
+    [canEdit, cloudRuntime, qoderRuntime, claudeRuntime, runtime?.provider],
   );
 
   const capabilitySections = useMemo(() => {
@@ -308,6 +313,14 @@ export function AgentAdvancedSettings({
                       />
                     ) : claudeRuntime ? (
                       <ClaudeAgentTab
+                        canEdit={canEdit}
+                        key={agent.id}
+                        agent={agent}
+                        onSave={save}
+                        onDirtyChange={setDirty}
+                      />
+                    ) : omaRuntime ? (
+                      <OMAAgentTab
                         canEdit={canEdit}
                         key={agent.id}
                         agent={agent}

@@ -16,21 +16,21 @@ func (b *Bridge) prepare(ctx context.Context, t *claimedTask) (*run, error) {
 		return nil, fmt.Errorf("claim identity does not match bridge")
 	}
 	if t.IssueID == "" || t.ChatSessionID != "" || t.IsLeaderTask {
-		return nil, fmt.Errorf("Claude Managed Agents bridge currently supports issue runs only")
+		return nil, fmt.Errorf("%s bridge currently supports issue runs only", b.profile.DisplayName)
 	}
 	if !strings.HasPrefix(t.AuthToken, "mat_") {
 		return nil, fmt.Errorf("claim is missing a task-scoped credential")
 	}
 	if len(t.RemoteMCPConnections) > 0 || len(t.ConnectedApps) > 0 || len(t.PluginHookTools) > 0 {
-		return nil, fmt.Errorf("Multica connected apps and runtime MCP tools are not supported by the Claude Managed Agents bridge")
+		return nil, fmt.Errorf("Multica connected apps and runtime MCP tools are not supported by the %s bridge", b.profile.DisplayName)
 	}
 	if t.Agent != nil && (hasCustomSkills(t.Agent.Skills) || len(t.Agent.SkillRefs) > 0 || len(t.Agent.CustomEnv) > 0 || len(t.Agent.CustomArgs) > 0 || len(t.Agent.McpConfig) > 0 && string(t.Agent.McpConfig) != "null" && string(t.Agent.McpConfig) != "{}" || t.Agent.Model != "" || t.Agent.ThinkingLevel != "" || t.Agent.ServiceTier != "") {
-		return nil, fmt.Errorf("configure skills, tools, credentials and model on the Claude agent; Multica execution overrides are not supported by this bridge")
+		return nil, fmt.Errorf("configure skills, tools, credentials and model on the %s; Multica execution overrides are not supported by this bridge", b.profile.AgentNoun)
 	}
 	if t.Agent == nil {
-		return nil, fmt.Errorf("associate a Claude agent in the Multica agent runtime configuration")
+		return nil, fmt.Errorf("%s", b.profile.AgentBindingError)
 	}
-	binding, err := ParseAgentConfig(t.Agent.RuntimeConfig)
+	binding, err := ParseAgentConfigForProfile(t.Agent.RuntimeConfig, b.profile)
 	if err != nil {
 		return nil, err
 	}
@@ -46,10 +46,10 @@ func (b *Bridge) prepare(ctx context.Context, t *claimedTask) (*run, error) {
 		return nil, fmt.Errorf("read issue: %w", err)
 	}
 	if len(issue.Attachments) > 0 {
-		return nil, fmt.Errorf("issue attachments are not supported by the Claude Managed Agents bridge")
+		return nil, fmt.Errorf("issue attachments are not supported by the %s bridge", b.profile.DisplayName)
 	}
 	var p strings.Builder
-	p.WriteString("Complete the following Multica issue in your Claude Managed Agents environment. Return a final summary including code changes, tests and branch/PR/MR links when available. This bridge does not expose a local Multica daemon.\n")
+	fmt.Fprintf(&p, "Complete the following Multica issue in your %s environment. Return a final summary including code changes, tests and branch/PR/MR links when available. This bridge does not expose a local Multica daemon.\n", b.profile.DisplayName)
 	if t.PriorSessionID != "" {
 		r.PriorSessionID = t.PriorSessionID
 		p.WriteString("This is a follow-up on the same issue. If the earlier conversation is not in your context, rely on the issue and comments below.\n")
@@ -70,7 +70,7 @@ func (b *Bridge) prepare(ctx context.Context, t *claimedTask) (*run, error) {
 	}
 	for _, res := range t.ProjectResources {
 		if res.ResourceType == "local_directory" {
-			return nil, fmt.Errorf("local directory resources cannot be executed by Claude Managed Agents")
+			return nil, fmt.Errorf("local directory resources cannot be executed by %s", b.profile.DisplayName)
 		}
 		if res.ResourceType != "github_repo" {
 			continue
@@ -79,26 +79,26 @@ func (b *Bridge) prepare(ctx context.Context, t *claimedTask) (*run, error) {
 		if err := json.Unmarshal(res.ResourceRef, &ref); err != nil {
 			return nil, fmt.Errorf("invalid repository resource")
 		}
-		resource, err := repositoryResource(ref)
+		resource, err := repositoryResourceFor(ref, b.profile.DisplayName)
 		if err != nil {
 			return nil, err
 		}
 		r.Resources = append(r.Resources, resource)
 		if len(r.Resources) > 1 {
-			return nil, fmt.Errorf("Claude Managed Agents supports one project repository per run")
+			return nil, fmt.Errorf("%s supports one project repository per run", b.profile.DisplayName)
 		}
 	}
 	// Project repositories win; otherwise use the agent's default repository,
 	// and finally the workspace's only repository when it has a credential.
 	if len(r.Resources) == 0 && binding.Repository != nil && binding.Repository.URL != "" {
-		resource, err := repositoryResource(*binding.Repository)
+		resource, err := repositoryResourceFor(*binding.Repository, b.profile.DisplayName)
 		if err != nil {
 			return nil, err
 		}
 		r.Resources = append(r.Resources, resource)
 	}
 	if len(r.Resources) == 0 && len(t.Repos) == 1 {
-		if resource, err := repositoryResource(Repository{URL: t.Repos[0].URL}); err == nil {
+		if resource, err := repositoryResourceFor(Repository{URL: t.Repos[0].URL}, b.profile.DisplayName); err == nil {
 			if _, err := b.sessionResources([]map[string]any{resource}); err == nil {
 				r.Resources = append(r.Resources, resource)
 			}
@@ -124,20 +124,36 @@ type Repository struct {
 	Ref string `json:"ref,omitempty"`
 }
 
-// AgentConfig is the runtime_config of a Multica agent bound to Claude Managed Agents.
 type AgentConfig struct {
-	AgentID    string      `json:"claude_agent_id"`
+	AgentID    string      `json:"-"`
 	Repository *Repository `json:"repository,omitempty"`
 }
 
-// ParseAgentConfig validates the Claude agent binding stored on a Multica agent.
 func ParseAgentConfig(raw json.RawMessage) (AgentConfig, error) {
+	return ParseAgentConfigForProfile(raw, ClaudeProfile())
+}
+
+func ParseAgentConfigForProfile(raw json.RawMessage, profile Profile) (AgentConfig, error) {
+	profile = normalizeProfile(profile)
+	return parseAgentConfig(raw, profile.AgentBindingKey, profile.AgentBindingError, profile.DisplayName)
+}
+
+func parseAgentConfig(raw json.RawMessage, bindingKey, bindingError, displayName string) (AgentConfig, error) {
+	var payload map[string]json.RawMessage
 	var cfg AgentConfig
-	if err := json.Unmarshal(raw, &cfg); err != nil || !ValidAgentID(cfg.AgentID) {
-		return cfg, fmt.Errorf("associate a Claude agent in the Multica agent runtime configuration")
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return cfg, fmt.Errorf("%s", bindingError)
+	}
+	if err := json.Unmarshal(payload[bindingKey], &cfg.AgentID); err != nil || !ValidAgentID(cfg.AgentID) {
+		return cfg, fmt.Errorf("%s", bindingError)
+	}
+	if repository := payload["repository"]; len(repository) > 0 && string(repository) != "null" {
+		if err := json.Unmarshal(repository, &cfg.Repository); err != nil {
+			return cfg, fmt.Errorf("%s", bindingError)
+		}
 	}
 	if cfg.Repository != nil && cfg.Repository.URL != "" {
-		if _, err := repositoryResource(*cfg.Repository); err != nil {
+		if _, err := repositoryResourceFor(*cfg.Repository, displayName); err != nil {
 			return cfg, fmt.Errorf("default repository: %w", err)
 		}
 	}
@@ -147,6 +163,10 @@ func ParseAgentConfig(raw json.RawMessage) (AgentConfig, error) {
 var commitRef = regexp.MustCompile(`^[a-fA-F0-9]{40}([a-fA-F0-9]{24})?$`)
 
 func repositoryResource(ref Repository) (map[string]any, error) {
+	return repositoryResourceFor(ref, ClaudeProfile().DisplayName)
+}
+
+func repositoryResourceFor(ref Repository, displayName string) (map[string]any, error) {
 	u, err := url.Parse(ref.URL)
 	if err != nil || u.Scheme != "https" || u.Hostname() != "github.com" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return nil, fmt.Errorf("repositories must use an HTTPS github.com URL without credentials")
@@ -154,11 +174,11 @@ func repositoryResource(ref Repository) (map[string]any, error) {
 	if _, err := repositoryKey(ref.URL); err != nil {
 		return nil, err
 	}
-	// Claude accepts only https://github.com/<owner>/<repo>, without a .git suffix.
+	// The managed runtime accepts only https://github.com/<owner>/<repo>, without a .git suffix.
 	path := strings.TrimSuffix(strings.TrimSuffix(u.Path, "/"), ".git")
 	resource := map[string]any{"type": "github_repository", "url": "https://github.com" + path}
 	if strings.HasPrefix(ref.Ref, "refs/tags/") || commitRef.MatchString(ref.Ref) {
-		return nil, fmt.Errorf("Claude Managed Agents supports branch refs only")
+		return nil, fmt.Errorf("%s supports branch refs only", displayName)
 	}
 	if name := strings.TrimPrefix(ref.Ref, "refs/heads/"); name != "" {
 		resource["checkout"] = map[string]string{"type": "branch", "name": name}

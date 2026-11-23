@@ -11,9 +11,9 @@ import (
 	"github.com/multica-ai/multica/server/internal/testutil"
 )
 
-// Claude Managed Agents refuses chat and quick-create before anything is
-// persisted: its bridge runs issue runs only. Qoder Cloud Agents runs chat
-// turns and creates quick-create issues itself.
+// Claude and OMA refuse chat and quick-create before anything is persisted:
+// their bridges run issue runs only. Qoder Cloud Agents runs chat turns and
+// creates quick-create issues itself.
 func TestCloudAgentChatAndQuickCreateEntrypoints(t *testing.T) {
 	if testPool == nil {
 		t.Skip("database not available")
@@ -23,6 +23,7 @@ func TestCloudAgentChatAndQuickCreateEntrypoints(t *testing.T) {
 		refused        bool
 	}{
 		{"claude_managed", "Claude Managed Agents", true},
+		{"oma_cloud", "OMA Managed Agents", true},
 		{"qoder_cloud", "Qoder Cloud Agents", false},
 	} {
 		t.Run(tc.provider, func(t *testing.T) {

@@ -192,7 +192,8 @@
     "rename_required": "名前は必須です",
     "edit_description_title": "説明を編集",
     "description_placeholder": "このエージェントは何をしますか？",
-    "cancel": "キャンセル"
+    "cancel": "キャンセル",
+    "oma_execution_note": "モデル、ツール、スキルは OMA エージェントで設定します。"
   },
   "overview": {
     "attention_title": "対応が必要な実行",
@@ -288,7 +289,8 @@
     "discard_dialog_title": "保存していない変更を破棄しますか？",
     "discard_dialog_description": "このタブに保存していない変更があります。今移動すると変更は破棄されます。",
     "discard_keep": "編集を続ける",
-    "discard_confirm": "変更を破棄"
+    "discard_confirm": "変更を破棄",
+    "oma_agent": "OMA エージェント"
   },
   "create_dialog": {
     "name_label": "名前",

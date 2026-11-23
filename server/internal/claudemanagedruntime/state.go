@@ -63,6 +63,9 @@ type run struct {
 	// task ID before any retry. CreateRetried allows exactly one retry.
 	CreateAttemptAt time.Time `json:"create_attempt_at,omitempty"`
 	CreateRetried   bool      `json:"create_retried,omitempty"`
+
+	UsageBase     sessionUsage `json:"usage_base,omitempty"`
+	UsageReported bool         `json:"usage_reported,omitempty"`
 }
 
 func save(path string, j *journal) error {

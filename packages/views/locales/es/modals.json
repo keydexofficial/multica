@@ -240,7 +240,8 @@
       "error_daemon_version": "La CLI del daemon de este agente ({{current}}) es inferior a la requerida ({{min}}). Actualiza el daemon para usar Crear con agente.",
       "error_unknown": "No se ha podido enviar. Inténtalo de nuevo.",
       "sub_issue_of": "Subtarea de {{identifier}}",
-      "qoder_attachments_unsupported": "Qoder Cloud Agents no puede leer adjuntos. Quítalos o elige otro agente."
+      "qoder_attachments_unsupported": "Qoder Cloud Agents no puede leer adjuntos. Quítalos o elige otro agente.",
+      "cloud_attachments_unsupported": "Los agentes en la nube no pueden leer adjuntos. Quítalos o elige otro agente."
     }
   },
   "mark_duplicate": {

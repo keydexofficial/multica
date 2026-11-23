@@ -16,9 +16,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/multica-ai/multica/server/internal/cloudagent"
 )
 
-const Provider = "qoder_cloud"
+const Provider = cloudagent.QoderProvider
 
 type Config struct {
 	DaemonID         string                                `json:"daemon_id,omitempty"`

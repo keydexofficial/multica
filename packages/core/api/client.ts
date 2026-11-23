@@ -35,6 +35,7 @@ import { archivedInboxQuery, type ArchivedInboxFilters } from "../inbox/filters"
 import type { ArchivedInboxPage, ArchivedInboxFacets } from "../types/inbox";
 import { parseQoderConnection, parseQoderCatalog, type QoderInput } from "../runtimes/qoder-schema";
 import { parseClaudeConnection, parseClaudeCatalog, type ClaudeInput } from "../runtimes/claude-managed-schema";
+import { parseOMAConnection, parseOMACatalog, type OMAInput } from "../runtimes/oma-schema";
 import { configStore } from "../config";
 import type {
   Issue,
@@ -2508,6 +2509,32 @@ export class ApiClient {
   }
   async listClaudeEnvironments(wsId: string, token: string, signal?: AbortSignal) {
     return parseClaudeCatalog(await this.fetch(`/api/workspaces/${wsId}/claude-managed/environments`, { method: "POST", body: JSON.stringify({ anthropic_token: token }), signal }));
+  }
+
+  async getOMAConnection(wsId: string) {
+    return parseOMAConnection(await this.fetch(`/api/workspaces/${wsId}/oma`));
+  }
+  // Saving keeps a paused connection paused; use resumeOMAConnection to run again.
+  async saveOMAConnection(wsId: string, input: OMAInput) {
+    return parseOMAConnection(await this.fetch(`/api/workspaces/${wsId}/oma`, { method: "PUT", body: JSON.stringify(omaInputBody(input)) }));
+  }
+  async resumeOMAConnection(wsId: string, input: OMAInput) {
+    return parseOMAConnection(await this.fetch(`/api/workspaces/${wsId}/oma/resume`, { method: "POST", body: JSON.stringify(omaInputBody(input)) }));
+  }
+  async checkOMAConnection(wsId: string, input: OMAInput): Promise<void> {
+    await this.fetch(`/api/workspaces/${wsId}/oma/check`, { method: "POST", body: JSON.stringify(omaInputBody(input)) });
+  }
+  async stopOMAConnection(wsId: string) {
+    return parseOMAConnection(await this.fetch(`/api/workspaces/${wsId}/oma/stop`, { method: "POST" }));
+  }
+  async disconnectOMAConnection(wsId: string, expectedActiveAgentIds: string[]) {
+    return parseOMAConnection(await this.fetch(`/api/workspaces/${wsId}/oma`, { method: "DELETE", body: JSON.stringify({ expected_active_agent_ids: expectedActiveAgentIds }) }));
+  }
+  async listOMAAgents(wsId: string) {
+    return parseOMACatalog(await this.fetch(`/api/workspaces/${wsId}/oma/agents`));
+  }
+  async listOMAEnvironments(wsId: string, baseUrl: string, token: string, signal?: AbortSignal) {
+    return parseOMACatalog(await this.fetch(`/api/workspaces/${wsId}/oma/environments`, { method: "POST", body: JSON.stringify({ base_url: baseUrl, api_token: token }), signal }));
   }
 
   async listRuntimes(
@@ -6601,6 +6628,19 @@ function claudeInputBody(input: ClaudeInput) {
     name: input.name,
     environment_id: input.environmentId,
     anthropic_token: input.anthropicToken,
+    github_tokens: input.githubTokens,
+    vault_ids: input.vaultIds,
+    max_concurrency: input.maxConcurrency,
+    run_timeout_minutes: input.runTimeoutMinutes,
+  };
+}
+
+function omaInputBody(input: OMAInput) {
+  return {
+    name: input.name,
+    base_url: input.baseUrl,
+    environment_id: input.environmentId,
+    api_token: input.apiToken,
     github_tokens: input.githubTokens,
     vault_ids: input.vaultIds,
     max_concurrency: input.maxConcurrency,

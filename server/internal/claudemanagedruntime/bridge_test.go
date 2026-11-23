@@ -53,13 +53,23 @@ type harness struct {
 	// prompt is submitted, e.g. with a recorded one.
 	history func(prompt string) []map[string]any
 	// vaultIDs is the vault_ids of the last session create; nil if absent.
-	vaultIDs []string
+	vaultIDs      []string
+	profile       Profile
+	runtimeConfig string
 }
 
 func setup(t *testing.T) *harness {
+	return setupWith(t, ClaudeProfile(), "claude_agent_id")
+}
+
+func setupOMA(t *testing.T) *harness {
+	return setupWith(t, OMAProfile(), "oma_agent_id")
+}
+
+func setupWith(t *testing.T, profile Profile, runtimeConfigKey string) *harness {
 	t.Helper()
-	h := &harness{status: "dispatched", foreignSession: map[string]any{"id": "sess_other", "agent": map[string]string{"id": "agent_1"}, "created_at": time.Now().UTC().Format(time.RFC3339), "metadata": map[string]string{"multica_task_id": "task-other", "multica_workspace_id": workspaceID}}}
-	h.task = &daemon.Task{ID: "task-1", RuntimeID: "runtime-1", WorkspaceID: workspaceID, IssueID: "issue-1", AuthToken: "mat_task", Agent: &daemon.AgentData{Instructions: "Run tests", RuntimeConfig: json.RawMessage(`{"claude_agent_id":"agent_1"}`), Skills: []daemon.SkillData{{Name: "multica-platform"}}}}
+	h := &harness{status: "dispatched", profile: profile, runtimeConfig: runtimeConfigKey, foreignSession: map[string]any{"id": "sess_other", "agent": map[string]string{"id": "agent_1"}, "created_at": time.Now().UTC().Format(time.RFC3339), "metadata": map[string]string{"multica_task_id": "task-other", "multica_workspace_id": workspaceID}}}
+	h.task = &daemon.Task{ID: "task-1", RuntimeID: "runtime-1", WorkspaceID: workspaceID, IssueID: "issue-1", AuthToken: "mat_task", Agent: &daemon.AgentData{Instructions: "Run tests", RuntimeConfig: json.RawMessage(fmt.Sprintf(`{"%s":"agent_1"}`, runtimeConfigKey)), Skills: []daemon.SkillData{{Name: "multica-platform"}}}}
 	m := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Header.Get("X-Workspace-ID") != workspaceID {
@@ -102,6 +112,8 @@ func setup(t *testing.T) *harness {
 			h.messages = append(h.messages, req.Messages...)
 			io.WriteString(w, `{}`)
 		case strings.HasSuffix(r.URL.Path, "/session"), strings.HasSuffix(r.URL.Path, "/cancel-ack"):
+			io.WriteString(w, `{}`)
+		case strings.HasSuffix(r.URL.Path, "/usage"):
 			io.WriteString(w, `{}`)
 		default:
 			t.Errorf("unexpected Multica request %s", r.URL)
@@ -227,7 +239,7 @@ func setup(t *testing.T) *harness {
 	}))
 	t.Cleanup(q.Close)
 	var err error
-	h.b, err = New(Config{MulticaURL: m.URL, MulticaToken: "multica-secret", WorkspaceID: workspaceID, AnthropicURL: q.URL, AnthropicToken: "anthropic-secret", EnvironmentID: "env_1", StateDir: t.TempDir()}, nil)
+	h.b, err = NewWithProfile(Config{MulticaURL: m.URL, MulticaToken: "multica-secret", WorkspaceID: workspaceID, AnthropicURL: q.URL, AnthropicToken: "anthropic-secret", EnvironmentID: "env_1", StateDir: t.TempDir()}, h.profile, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -275,6 +287,33 @@ func TestIssueRun(t *testing.T) {
 		t.Fatal("credential persisted")
 	}
 }
+func TestOMAIssueRun(t *testing.T) {
+	h := setupOMA(t)
+	ctx := context.Background()
+	if err := h.b.step(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if h.complete != nil {
+		t.Fatal("completed before user turn")
+	}
+	if h.b.profile.Provider != "oma_cloud" {
+		t.Fatalf("provider = %q", h.b.profile.Provider)
+	}
+	if !strings.Contains(h.prompt, "OMA Managed Agents environment") || strings.Contains(h.prompt, "Claude") {
+		t.Fatalf("OMA prompt named the wrong provider: %s", h.prompt)
+	}
+	h.finish("end_turn")
+	if err := h.b.step(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if h.complete["session_id"] != "sess_1" || !strings.Contains(fmt.Sprint(h.complete["output"]), "Tests passed") {
+		t.Fatalf("result: %#v", h.complete)
+	}
+	if h.creates != 1 || h.initialEvents != 1 || h.sends != 0 || len(h.messages) != 1 || h.b.state.first() != nil {
+		t.Fatalf("incorrect OMA lifecycle: creates=%d initial_events=%d sends=%d", h.creates, h.initialEvents, h.sends)
+	}
+}
+
 func TestAmbiguousSubmitReconcilesAfterRestart(t *testing.T) {
 	h := setup(t)
 	h.followUp()
@@ -626,7 +665,7 @@ func TestAmbiguousCreationFailsAfterOneRetry(t *testing.T) {
 	if err := h.b.step(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if h.creates != 2 || !strings.Contains(fmt.Sprint(h.failure["error"]), "Claude session creation was not confirmed") || h.b.state.first() != nil {
+	if h.creates != 2 || !strings.Contains(fmt.Sprint(h.failure["error"]), "session creation was not confirmed") || h.b.state.first() != nil {
 		t.Fatalf("creates=%d failure=%v", h.creates, h.failure)
 	}
 }
@@ -770,7 +809,7 @@ func TestManagedJournalPersistsWithoutLocalFiles(t *testing.T) {
 }
 
 func TestToolResultsPreserveCallIdentity(t *testing.T) {
-	for _, prefix := range []string{"agent.", "agent.mcp_"} {
+	for _, prefix := range []string{"agent.", "agent.mcp_", "agent.custom_"} {
 		t.Run(prefix, func(t *testing.T) {
 			h := setup(t)
 			ctx := context.Background()

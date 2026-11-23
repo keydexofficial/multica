@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { I18nProvider } from "@multica/core/i18n/react";
 import type { ClaudeConnection } from "@multica/core/runtimes/claude-managed";
+import type { OMAConnection } from "@multica/core/runtimes/oma";
 import type { QoderConnection } from "@multica/core/runtimes/qoder";
 import type { AgentRuntime } from "@multica/core/types";
 import enAgents from "../../locales/en/agents.json";
@@ -106,6 +107,24 @@ const unconnectedClaude: ClaudeConnection = {
   queuedRuns: 0,
 };
 
+const unconnectedOMA: OMAConnection = {
+  configured: false,
+  available: true,
+  name: "",
+  baseUrl: "",
+  environmentId: "",
+  hasToken: false,
+  repositories: [],
+  vaultIds: [],
+  enabled: false,
+  status: "",
+  lastError: "",
+  maxConcurrency: 0,
+  runTimeoutMinutes: 0,
+  activeRuns: 0,
+  queuedRuns: 0,
+};
+
 function mount(overrides: Partial<RuntimeChoiceListProps> = {}) {
   const props: RuntimeChoiceListProps = {
     local: groups.local,
@@ -120,6 +139,9 @@ function mount(overrides: Partial<RuntimeChoiceListProps> = {}) {
     claude: null,
     claudeState: null,
     claudeSelected: false,
+    oma: null,
+    omaState: null,
+    omaSelected: false,
     selectedRuntimeId: null,
     query: "",
     currentUserId: "me",
@@ -132,6 +154,9 @@ function mount(overrides: Partial<RuntimeChoiceListProps> = {}) {
     onSelectClaude: vi.fn(),
     onConnectClaude: vi.fn(),
     onManageClaude: vi.fn(),
+    onSelectOMA: vi.fn(),
+    onConnectOMA: vi.fn(),
+    onManageOMA: vi.fn(),
     onAddRemote: vi.fn(),
     ...overrides,
   };
@@ -227,5 +252,24 @@ describe("RuntimeChoiceList", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: /Claude Managed Agents/ }));
     expect(readyProps.onSelectClaude).toHaveBeenCalledTimes(1);
+  });
+
+  it("lists OMA Managed Agents as a cloud service, connectable in place and selectable once ready", () => {
+    const props = mount({
+      oma: unconnectedOMA,
+      omaState: qoderChoiceState(unconnectedOMA, false),
+    });
+    expect(screen.getByText("OMA Managed Agents")).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole("button", { name: "Connect" }).at(-1)!);
+    expect(props.onConnectOMA).toHaveBeenCalledTimes(1);
+
+    cleanup();
+    const ready = { ...unconnectedOMA, configured: true, enabled: true, status: "online" };
+    const readyProps = mount({
+      oma: ready,
+      omaState: qoderChoiceState(ready, true),
+    });
+    fireEvent.click(screen.getByRole("button", { name: /OMA Managed Agents/ }));
+    expect(readyProps.onSelectOMA).toHaveBeenCalledTimes(1);
   });
 });

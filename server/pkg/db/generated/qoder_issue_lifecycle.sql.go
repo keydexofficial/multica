@@ -15,7 +15,7 @@ const lockQoderTaskIssue = `-- name: LockQoderTaskIssue :one
 SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at, i.start_date, i.metadata, i.stage, i.properties, i.revision, i.last_activity_at, i.triage_state, i.duplicate_of_issue_id, i.requester_user_id, i.description_revision, r.provider FROM issue i
 JOIN agent_task_queue t ON t.issue_id = i.id
 JOIN agent_runtime r ON r.id = t.runtime_id AND r.workspace_id = i.workspace_id
-WHERE t.id = $1 AND r.provider IN ('qoder_cloud', 'claude_managed')
+WHERE t.id = $1 AND r.provider = ANY($2::text[])
   AND i.assignee_type = 'agent' AND i.assignee_id = t.agent_id
   AND NOT EXISTS (
     SELECT 1 FROM agent_task_queue newer
@@ -24,14 +24,19 @@ WHERE t.id = $1 AND r.provider IN ('qoder_cloud', 'claude_managed')
 FOR UPDATE OF i
 `
 
+type LockQoderTaskIssueParams struct {
+	TaskID    pgtype.UUID `json:"task_id"`
+	Providers []string    `json:"providers"`
+}
+
 type LockQoderTaskIssueRow struct {
 	Issue    Issue  `json:"issue"`
 	Provider string `json:"provider"`
 }
 
 // The task row is locked by the lifecycle transition before locking its issue.
-func (q *Queries) LockQoderTaskIssue(ctx context.Context, taskID pgtype.UUID) (LockQoderTaskIssueRow, error) {
-	row := q.db.QueryRow(ctx, lockQoderTaskIssue, taskID)
+func (q *Queries) LockQoderTaskIssue(ctx context.Context, arg LockQoderTaskIssueParams) (LockQoderTaskIssueRow, error) {
+	row := q.db.QueryRow(ctx, lockQoderTaskIssue, arg.TaskID, arg.Providers)
 	var i LockQoderTaskIssueRow
 	err := row.Scan(
 		&i.Issue.ID,

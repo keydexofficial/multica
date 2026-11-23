@@ -8,6 +8,7 @@ import { agentTaskSnapshotOptions } from "@multica/core/agents";
 import { chatSessionsOptions } from "@multica/core/chat/queries";
 import { runtimeProfileListOptions } from "@multica/core/runtimes";
 import { claudeManagedOptions } from "@multica/core/runtimes/claude-managed";
+import { omaManagedOptions } from "@multica/core/runtimes/oma";
 import { qoderOptions, type QoderConnection } from "@multica/core/runtimes/qoder";
 import { runtimeListOptions } from "@multica/core/runtimes/queries";
 import type { AgentRuntime } from "@multica/core/types";
@@ -138,6 +139,23 @@ function renderPage({
     activeRuns: 0,
     queuedRuns: 0,
   });
+  qc.setQueryData(omaManagedOptions(WS).queryKey, {
+    available: false,
+    configured: false,
+    name: "",
+    baseUrl: "",
+    environmentId: "",
+    hasToken: false,
+    repositories: [],
+    vaultIds: [],
+    enabled: false,
+    status: "",
+    lastError: "",
+    maxConcurrency: 3,
+    runTimeoutMinutes: 60,
+    activeRuns: 0,
+    queuedRuns: 0,
+  });
   return render(
     <QueryClientProvider client={qc}>
       <I18nProvider locale="en" resources={TEST_RESOURCES}>
@@ -163,8 +181,10 @@ describe("RuntimesPage", () => {
     expect(screen.getByText("Machines")).toBeInTheDocument();
     expect(screen.getByText("Cloud services")).toBeInTheDocument();
     expect(screen.getByText("dev-machine.local")).toBeInTheDocument();
-    expect(screen.getByText("Not connected")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Connect" })).toBeInTheDocument();
+    expect(screen.getAllByText("Not connected").length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByRole("button", { name: "Connect" }).length,
+    ).toBeGreaterThan(0);
     expect(screen.getByText("Cursor Cloud Agents")).toBeInTheDocument();
     expect(screen.getByText("Claude Managed Agents")).toBeInTheDocument();
   });

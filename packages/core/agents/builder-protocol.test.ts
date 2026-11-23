@@ -14,6 +14,7 @@ import type { AgentDraft } from "./draft";
 const draft = (): AgentDraft => ({
   qoderAgentId: "",
   claudeAgentId: "",
+  omaAgentId: "",
   name: "Old name",
   description: "Old description",
   instructions: "Old instructions",

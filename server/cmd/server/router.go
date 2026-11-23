@@ -1943,6 +1943,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/qoder/agents", h.ListQoderAgents)
 					r.Get("/claude-managed", h.GetClaudeConnection)
 					r.Get("/claude-managed/agents", h.ListClaudeAgents)
+					r.Get("/oma", h.GetOMAConnection)
+					r.Get("/oma/agents", h.ListOMAAgents)
 					// Custom runtime profiles — listing/reading is member-visible
 					// (the Runtime page renders for everyone; create/edit/delete
 					// are admin-gated below).
@@ -2043,6 +2045,12 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/claude-managed/stop", h.StopClaudeConnection)
 					r.Post("/claude-managed/resume", h.ResumeClaudeConnection)
 					r.Delete("/claude-managed", h.DisconnectClaudeConnection)
+					r.Put("/oma", h.SaveOMAConnection)
+					r.Post("/oma/check", h.CheckOMAConnection)
+					r.Post("/oma/environments", h.ListOMAEnvironments)
+					r.Post("/oma/stop", h.StopOMAConnection)
+					r.Post("/oma/resume", h.ResumeOMAConnection)
+					r.Delete("/oma", h.DisconnectOMAConnection)
 					r.Post("/vcs/connections/{connectionId}/rotate-webhook", h.RotateVCSConnectionWebhook)
 					r.Delete("/vcs/connections/{connectionId}", h.DeleteVCSConnection)
 				})

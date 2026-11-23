@@ -201,7 +201,8 @@
     "description_placeholder": "¿Qué hace este agente?",
     "cancel": "Cancelar",
     "qoder_execution_note": "El modelo, las herramientas y las skills se configuran en el agente desde Qoder Cloud Agents.",
-    "claude_execution_note": "El modelo, las herramientas y las skills se definen en el agente de Claude."
+    "claude_execution_note": "El modelo, las herramientas y las skills se definen en el agente de Claude.",
+    "oma_execution_note": "El modelo, las herramientas y las habilidades se configuran en el agente de OMA."
   },
   "overview": {
     "attention_title": "Ejecuciones que requieren atención",
@@ -277,7 +278,8 @@
     "discard_keep": "Seguir editando",
     "discard_confirm": "Descartar cambios",
     "qoder_agent": "Qoder Cloud Agents",
-    "claude_agent": "Agente de Claude"
+    "claude_agent": "Agente de Claude",
+    "oma_agent": "Agente de OMA"
   },
   "creation_studio": {
     "title": "Crear un agente",

@@ -9,6 +9,7 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { qoderOptions } from "@multica/core/runtimes/qoder";
 import { claudeManagedOptions } from "@multica/core/runtimes/claude-managed";
+import { omaManagedOptions } from "@multica/core/runtimes/oma";
 import { runtimeKeys, runtimeListOptions } from "@multica/core/runtimes/queries";
 import { useWSEvent } from "@multica/core/realtime";
 import { memberListOptions } from "@multica/core/workspace/queries";
@@ -24,6 +25,10 @@ import {
   CLAUDE_MANAGED_LOCATOR,
   ClaudeConnectDialog,
 } from "../../runtimes/components/claude-managed-page";
+import {
+  OMA_MANAGED_LOCATOR,
+  OMAConnectDialog,
+} from "../../runtimes/components/oma-managed-page";
 import { buildRuntimeMachines } from "../../runtimes/components/runtime-machines";
 import { CreateFlowFooter } from "./create-agent-footer";
 import { AgentCreateShell } from "./create-shell";
@@ -36,6 +41,7 @@ type Selection =
   | { kind: "runtime"; runtimeId: string }
   | { kind: "qoder" }
   | { kind: "claude" }
+  | { kind: "oma" }
   | null;
 
 /** How often a starting Qoder runtime is re-fetched while this screen shows it. */
@@ -78,6 +84,7 @@ export function ChooseRuntimePage({
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: qoderConnection } = useQuery(qoderOptions(wsId));
   const { data: claudeConnection } = useQuery(claudeManagedOptions(wsId));
+  const { data: omaConnection } = useQuery(omaManagedOptions(wsId));
   const { data: sessions = [] } = useQuery(agentBuilderSessionListOptions(wsId));
 
   useWSEvent("daemon:register", () => {
@@ -110,6 +117,11 @@ export function ChooseRuntimePage({
   const claudeState = claude
     ? qoderChoiceState(claude, claudeRuntime?.status === "online")
     : null;
+  const oma = omaConnection ?? null;
+  const omaRuntime = groups.omaRuntime;
+  const omaState = oma
+    ? qoderChoiceState(oma, omaRuntime?.status === "online")
+    : null;
 
   const [selection, setSelection] = useState<Selection>(null);
   const [query, setQuery] = useState("");
@@ -118,6 +130,8 @@ export function ChooseRuntimePage({
   const [selectQoderWhenReady, setSelectQoderWhenReady] = useState(false);
   const [claudeDialogOpen, setClaudeDialogOpen] = useState(false);
   const [selectClaudeWhenReady, setSelectClaudeWhenReady] = useState(false);
+  const [omaDialogOpen, setOMADialogOpen] = useState(false);
+  const [selectOMAWhenReady, setSelectOMAWhenReady] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
 
   const options = useMemo(() => {
@@ -143,10 +157,11 @@ export function ChooseRuntimePage({
     if (!runtimeParam) return;
     if (qoderRuntime?.id === runtimeParam) setSelection({ kind: "qoder" });
     else if (claudeRuntime?.id === runtimeParam) setSelection({ kind: "claude" });
+    else if (omaRuntime?.id === runtimeParam) setSelection({ kind: "oma" });
     else if (options.has(runtimeParam)) {
       setSelection({ kind: "runtime", runtimeId: runtimeParam });
     }
-  }, [runtimeParam, runtimesLoading, options, qoderRuntime, claudeRuntime]);
+  }, [runtimeParam, runtimesLoading, options, qoderRuntime, claudeRuntime, omaRuntime]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -198,6 +213,24 @@ export function ChooseRuntimePage({
     }
   }, [selectClaudeWhenReady, claudeState]);
 
+  useEffect(() => {
+    if (omaState !== "starting") return;
+    const timer = setInterval(() => {
+      void qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });
+    }, QODER_REGISTER_POLL_MS);
+    return () => clearInterval(timer);
+  }, [omaState, qc, wsId]);
+
+  useEffect(() => {
+    if (!selectOMAWhenReady) return;
+    if (omaState === "ready") {
+      setSelectOMAWhenReady(false);
+      setSelection({ kind: "oma" });
+    } else if (omaState === "error" || omaState === "stopped") {
+      setSelectOMAWhenReady(false);
+    }
+  }, [selectOMAWhenReady, omaState]);
+
   const selected =
     selection?.kind === "runtime" ? options.get(selection.runtimeId) ?? null : null;
   const nextRuntimeId =
@@ -209,9 +242,13 @@ export function ChooseRuntimePage({
         ? claudeState === "ready"
           ? claudeRuntime?.id ?? null
           : null
-        : selected && selected.option.runtime.status === "online"
-          ? selected.option.runtime.id
-          : null;
+        : selection?.kind === "oma"
+          ? omaState === "ready"
+            ? omaRuntime?.id ?? null
+            : null
+          : selected && selected.option.runtime.status === "online"
+            ? selected.option.runtime.id
+            : null;
 
   const goNext = (runtimeId: string) =>
     navigation.push(
@@ -231,9 +268,11 @@ export function ChooseRuntimePage({
       ? "Qoder Cloud Agents"
       : selection?.kind === "claude"
         ? "Claude Managed Agents"
-        : selected
-          ? `${selected.option.label} · ${selected.where}`
-          : null;
+        : selection?.kind === "oma"
+          ? "OMA Managed Agents"
+          : selected
+            ? `${selected.option.label} · ${selected.where}`
+            : null;
 
   return (
     <AgentCreateShell
@@ -295,6 +334,9 @@ export function ChooseRuntimePage({
               claude={claude}
               claudeState={claudeState}
               claudeSelected={selection?.kind === "claude"}
+              oma={oma}
+              omaState={omaState}
+              omaSelected={selection?.kind === "oma"}
               selectedRuntimeId={selection?.kind === "runtime" ? selection.runtimeId : null}
               query={query}
               currentUserId={currentUserId}
@@ -320,6 +362,13 @@ export function ChooseRuntimePage({
               onConnectClaude={() => setClaudeDialogOpen(true)}
               onManageClaude={() =>
                 navigation.push(paths.runtimeDetail(CLAUDE_MANAGED_LOCATOR))
+              }
+              onSelectOMA={() =>
+                setSelection((current) => (current?.kind === "oma" ? null : { kind: "oma" }))
+              }
+              onConnectOMA={() => setOMADialogOpen(true)}
+              onManageOMA={() =>
+                navigation.push(paths.runtimeDetail(OMA_MANAGED_LOCATOR))
               }
               onAddRemote={() => setShowConnectRemote(true)}
             />
@@ -358,6 +407,12 @@ export function ChooseRuntimePage({
         <ClaudeConnectDialog
           onConnected={() => setSelectClaudeWhenReady(true)}
           onClose={() => setClaudeDialogOpen(false)}
+        />
+      ) : null}
+      {omaDialogOpen ? (
+        <OMAConnectDialog
+          onConnected={() => setSelectOMAWhenReady(true)}
+          onClose={() => setOMADialogOpen(false)}
         />
       ) : null}
     </AgentCreateShell>

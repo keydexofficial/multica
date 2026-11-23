@@ -21,3 +21,4 @@ export * from "./runtime-binding";
 
 export * from "./qoder-runtime-config";
 export * from "./claude-runtime-config";
+export * from "./oma-runtime-config";

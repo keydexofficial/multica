@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/multica-ai/multica/server/internal/cloudagent"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/dbid"
@@ -24,7 +25,7 @@ func syncQoderIssue(ctx context.Context, q *db.Queries, task db.AgentTaskQueue, 
 	if !task.IssueID.Valid || !task.RuntimeID.Valid {
 		return nil, nil
 	}
-	locked, err := q.LockQoderTaskIssue(ctx, task.ID)
+	locked, err := q.LockQoderTaskIssue(ctx, db.LockQoderTaskIssueParams{TaskID: task.ID, Providers: cloudagent.Providers()})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}

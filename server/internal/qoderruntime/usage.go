@@ -9,7 +9,7 @@ import (
 
 // usageProvider is the task_usage provider for Qoder Cloud Agents runs; it
 // matches the runtime provider so usage rows line up with the runtime.
-const usageProvider = "qoder_cloud"
+const usageProvider = Provider
 
 // runCredits tracks what Qoder charged for one run, in millionths of a credit.
 // Qoder reports credits instead of tokens. A session is cumulative across

@@ -287,7 +287,8 @@ export function ClaudeConnectionForm({
           placeholder={
             connection.hasToken
               ? t(($) => $.claude_managed.keep_secret)
-              : "sk-ant-…"
+              : // eslint-disable-next-line no-restricted-syntax -- an API key prefix, a technical value
+                "sk-ant-…"
           }
           value={token}
           disabled={busy}
