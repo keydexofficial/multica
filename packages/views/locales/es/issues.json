@@ -642,6 +642,13 @@
     "squad_leader_no_action_reason": "evaluó: no hacía falta actuar ({{reason}})",
     "squad_leader_failed": "la evaluación falló",
     "squad_leader_failed_reason": "la evaluación falló: {{reason}}",
+    "squad_handoff_to": "se lo pasó a {{name}}",
+    "squad_handoff_human": "pidió a {{name}} que decida",
+    "squad_handoff_leader": "se lo devolvió a {{name}}",
+    "squad_handoff_round": "ronda {{round}}",
+    "squad_handoff_reason_round_limit": "límite de {{limit}} rondas",
+    "squad_handoff_reason_daily_limit": "límite diario de traspasos",
+    "squad_handoff_reason_run_failed": "ejecución fallida",
     "coalesced_badge": "×{{count}}",
     "activity_count_one": "{{count}} actividad",
     "activity_count_other": "{{count}} actividades",
@@ -865,6 +872,7 @@
   },
   "agent_live": {
     "is_working": "{{name}} está trabajando",
+    "is_working_round": "{{label}} · ronda {{round}}",
     "is_queued": "{{name}} está en cola",
     "is_waiting_local_directory": "{{name}} está esperando el directorio local",
     "queued_elapsed_prefix": "en cola desde hace {{elapsed}}",
@@ -1033,6 +1041,7 @@
     "remove_parent_issue": "Quitar tarea principal",
     "remove_parent_issue_success": "Tarea principal quitada",
     "add_sub_issue": "Añadir subtarea...",
+    "add_blocker": "Añadir requisito...",
     "delete_issue": "Eliminar tarea",
     "mark_duplicate": "Marcar como duplicada...",
     "rename_issue": "Renombrar tarea",
@@ -2021,7 +2030,8 @@
       "pending": "En espera",
       "approved": "Aprobada",
       "rejected": "Rechazada",
-      "rate_limited": "Límite de llamadas alcanzado"
+      "rate_limited": "Límite de llamadas alcanzado",
+      "quota_exceeded": "Límite mensual alcanzado"
     }
   },
   "environments": {
@@ -2152,6 +2162,17 @@
     "empty": "Sin tareas pendientes",
     "picker_hint": "Selecciona una tarea que deba terminar antes que esta.",
     "restricted": "{{count}} requisitos restringidos",
-    "ended": "Las tareas en espera terminaron"
+    "ended": "Las tareas en espera terminaron",
+    "marker_title": "Bloqueada por {{count}} tareas",
+    "marker_title_one": "Bloqueada por {{count}} tarea",
+    "marker_title_other": "Bloqueada por {{count}} tareas",
+    "marker_ended": "{{finished}}/{{total}} terminadas",
+    "marker_more": "{{count}} más",
+    "marker_more_one": "{{count}} más",
+    "marker_more_other": "{{count}} más",
+    "marker_auto_start": "{{name}} comenzará automáticamente cuando terminen.",
+    "marker_notify": "{{name}} recibirá una notificación cuando terminen.",
+    "marker_unavailable": "{{name}} no puede ejecutarse ahora, así que nada comenzará cuando terminen.",
+    "marker_unassigned": "Sin responsable: nada comenzará cuando terminen."
   }
 }
