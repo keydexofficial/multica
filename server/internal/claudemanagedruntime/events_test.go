@@ -26,6 +26,9 @@ type eventLog struct {
 	pageSize int
 	requests []url.Values
 	issued   map[string]string
+	// hideOnTimeFilter simulates a provider whose created_at is older than
+	// processed_at, so a processed_at-based filter omits even the cursor.
+	hideOnTimeFilter bool
 }
 
 // filters encodes every query parameter except the page cursor.
@@ -83,6 +86,12 @@ func (l *eventLog) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		start = n
 	} else if gte := q.Get("created_at[gte]"); gte != "" {
 		start = len(l.events)
+		if l.hideOnTimeFilter {
+			// The cursor's created_at predates its processed_at, so this filter
+			// cannot see it.
+			json.NewEncoder(w).Encode(map[string]any{"data": []any{}, "next_page": nil})
+			return
+		}
 		for i, e := range l.events {
 			if e["processed_at"].(string) >= gte {
 				start = i
@@ -267,6 +276,26 @@ func TestEventsResumeScanKeepsFiltersWithPageCursor(t *testing.T) {
 	}
 	if len(l.requests) != 3 || l.requests[2].Get("page") != "page_5" {
 		t.Fatalf("requests = %v", l.requests)
+	}
+}
+
+// A provider whose created_at predates processed_at can hide the cursor event
+// behind the time filter. The bridge retries without the filter instead of
+// failing the same way on every tick.
+func TestEventsCursorFallsBackWhenTimeFilterHidesIt(t *testing.T) {
+	h, l := startOnLog(t, 100)
+	r := h.b.state.first()
+	r.Cursor, r.CursorAt, r.Page = "evt_user", "2026-01-01T00:00:00Z", ""
+	l.hideOnTimeFilter = true
+	l.idle("evt_idle", "2026-01-01T00:00:02Z", "end_turn")
+	if err := h.b.step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if h.complete == nil {
+		t.Fatalf("run did not recover from a hidden cursor; requests = %v", l.requests)
+	}
+	if len(l.requests) != 2 || l.requests[0].Get("created_at[gte]") == "" || l.requests[1].Get("created_at[gte]") != "" {
+		t.Fatalf("requests = %v, want a filtered scan then an unfiltered one", l.requests)
 	}
 }
 

@@ -149,9 +149,8 @@ export function AgentDetailInspector({
   const conversationStartersEnabled = useConfigStore(
     (state) => state.agentConversationStartersSupported,
   );
-  // Claude and OMA never open a chat, so nothing chat-facing applies.
-  const showStarters =
-    conversationStartersEnabled && !claudeRuntime && !omaRuntime;
+  // Claude never opens a chat, so nothing chat-facing applies.
+  const showStarters = conversationStartersEnabled && !claudeRuntime;
   const startersComplete = starters.every(
     (item) => item.label.trim() && item.prompt.trim(),
   );

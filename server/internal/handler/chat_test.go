@@ -74,11 +74,11 @@ func TestSendChatMessage_RefusesCloudAgentWithoutChat(t *testing.T) {
 	// A cloud provider whose runtime cannot accept chat turns must answer with
 	// the structured chat_unsupported reason so clients can show the real cause
 	// instead of a generic send failure.
-	runtimeID := dbfx.Runtime(t, "OMA managed", testutil.Cols{
-		"provider":  "oma_cloud",
-		"daemon_id": "oma-managed-" + testWorkspaceID,
+	runtimeID := dbfx.Runtime(t, "Claude managed", testutil.Cols{
+		"provider":  "claude_managed",
+		"daemon_id": "claude-managed-" + testWorkspaceID,
 	})
-	agentID := dbfx.Agent(t, "OMA chat agent", runtimeID)
+	agentID := dbfx.Agent(t, "Claude chat agent", runtimeID)
 	sessionID := createHandlerTestChatSession(t, agentID)
 
 	req := newRequest("POST", "/api/chat-sessions/"+sessionID+"/messages", map[string]any{
@@ -99,8 +99,33 @@ func TestSendChatMessage_RefusesCloudAgentWithoutChat(t *testing.T) {
 	if body.ReasonCode != ReasonChatUnsupported {
 		t.Fatalf("reason_code = %q, want %q", body.ReasonCode, ReasonChatUnsupported)
 	}
-	if !strings.Contains(body.Error, "OMA Managed Agents") {
+	if !strings.Contains(body.Error, "Claude Managed Agents") {
 		t.Fatalf("fallback error = %q, want it to name the provider", body.Error)
+	}
+}
+
+func TestSendChatMessage_AllowsCloudAgentWithChat(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	runtimeID := dbfx.Runtime(t, "OMA managed chat", testutil.Cols{
+		"provider":  "oma_cloud",
+		"daemon_id": "oma-managed-" + testWorkspaceID,
+	})
+	agentID := dbfx.Agent(t, "OMA chat agent", runtimeID)
+	sessionID := createHandlerTestChatSession(t, agentID)
+
+	req := newRequest("POST", "/api/chat-sessions/"+sessionID+"/messages", map[string]any{
+		"content": "hello",
+	})
+	req = withURLParam(req, "sessionId", sessionID)
+	req = withChatTestWorkspaceCtx(t, req)
+	w := httptest.NewRecorder()
+	testHandler.SendChatMessage(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("SendChatMessage: expected 201, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

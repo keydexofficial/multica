@@ -112,7 +112,7 @@ Phase 5 的“仓库挂载 + branch push / 开 PR”还需要：
 ## 7. 明确不需要 / 不属于 Phase 5
 
 - 创建 OMA 侧 agent 或 environment。
-- OMA chat、quick-create、attachments、local directory。
+- OMA quick-create、local directory。
 - session budgets、交互式 tool approval、SSE。
 - `apps/docs` OMA 页面与品牌图标（Phase 6）。
 - standalone `oma-runtime`（除非要单独验证协议）。

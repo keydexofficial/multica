@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/cloudagent"
 	"github.com/multica-ai/multica/server/internal/integrations/wecom"
-	"github.com/multica-ai/multica/server/internal/qoderruntime"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -15,8 +15,12 @@ type chatNoticeUserLookup interface {
 	GetUser(context.Context, pgtype.UUID) (db.User, error)
 }
 
-func (h *Handler) qoderChatNoticeLocale(ctx context.Context, runtime db.AgentRuntime, task db.AgentTaskQueue, session db.ChatSession, channelType, chatType string) string {
-	if runtime.Provider != qoderruntime.Provider {
+// cloudChatNoticeLocale picks the locale for a bridge-generated delivery
+// notice. Only cloud providers whose runtime can take chat turns carry one;
+// local daemons render their own notices, and a chat-incapable cloud runtime
+// never claims a chat turn in the first place.
+func (h *Handler) cloudChatNoticeLocale(ctx context.Context, runtime db.AgentRuntime, task db.AgentTaskQueue, session db.ChatSession, channelType, chatType string) string {
+	if !cloudagent.SupportsChat(runtime.Provider) {
 		return ""
 	}
 	// A cosmetic lookup cannot hold up a task claim. Never use the runtime

@@ -109,6 +109,15 @@ describe("AgentDetailInspector conversation starters", () => {
     expect(screen.getByText("New chat preview")).toBeInTheDocument();
   });
 
+  it("offers starters and a chat preview for an OMA agent", () => {
+    renderInspector({
+      runtime: { id: "runtime-1", provider: "oma_cloud" } as AgentRuntime,
+    });
+
+    expect(screen.getByText("Conversation starters")).toBeInTheDocument();
+    expect(screen.getByText("New chat preview")).toBeInTheDocument();
+  });
+
   it("offers no starters or chat preview for a Claude Managed Agents agent, which has no chat", () => {
     renderInspector({
       runtime: { id: "runtime-1", provider: "claude_managed" } as AgentRuntime,

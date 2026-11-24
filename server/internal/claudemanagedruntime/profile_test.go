@@ -18,15 +18,26 @@ func omaProfile() Profile {
 
 func TestOMAProfileIdentity(t *testing.T) {
 	profile := OMAProfile()
-	if profile.Provider != "oma_cloud" || profile.StandalonePrefix != "oma-bridge-" || profile.AgentBindingKey != "oma_agent_id" || profile.Usage != UsageSession || !profile.AllowPlainHTTP || !profile.BetaQuery || !profile.SkipWorkspaceKeyDetection {
+	if profile.Provider != "oma_cloud" || profile.StandalonePrefix != "oma-bridge-" || profile.AgentBindingKey != "oma_agent_id" || profile.Usage != UsageSession || !profile.AllowPlainHTTP || !profile.BetaQuery || !profile.SkipWorkspaceKeyDetection || !profile.Chat {
 		t.Fatalf("OMA profile = %+v", profile)
+	}
+}
+
+// The bridge's own gate must agree with the server's provider capability, or a
+// task the server enqueues would be rejected after the fact (or the reverse).
+func TestProfileChatMatchesProviderCapability(t *testing.T) {
+	if got, want := OMAProfile().Chat, cloudagent.SupportsChat(cloudagent.OMAProvider); got != want {
+		t.Fatalf("OMA profile chat = %v, provider capability = %v", got, want)
+	}
+	if got, want := ClaudeProfile().Chat, cloudagent.SupportsChat(cloudagent.ClaudeProvider); got != want {
+		t.Fatalf("Claude profile chat = %v, provider capability = %v", got, want)
 	}
 }
 
 func TestProfileNormalizesPartialOMA(t *testing.T) {
 	got := normalizeProfile(Profile{Provider: cloudagent.OMAProvider})
 	want := OMAProfile()
-	if got.DisplayName != want.DisplayName || got.AgentNoun != want.AgentNoun || got.AgentBindingKey != want.AgentBindingKey || got.FailureReason != want.FailureReason || got.StandalonePrefix != want.StandalonePrefix || got.Usage != want.Usage || !got.AllowPlainHTTP || !got.BetaQuery || !got.SkipWorkspaceKeyDetection {
+	if got.DisplayName != want.DisplayName || got.AgentNoun != want.AgentNoun || got.AgentBindingKey != want.AgentBindingKey || got.FailureReason != want.FailureReason || got.StandalonePrefix != want.StandalonePrefix || got.Usage != want.Usage || !got.AllowPlainHTTP || !got.BetaQuery || !got.SkipWorkspaceKeyDetection || !got.Chat {
 		t.Fatalf("normalized OMA profile = %+v", got)
 	}
 }

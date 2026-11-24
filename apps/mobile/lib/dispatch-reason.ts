@@ -40,8 +40,8 @@ export function sendFailureMessage(
         detail: t("failure.runtime_access_recovery"),
       });
     case "chat_unsupported":
-      // Cloud-managed agents (OMA, Claude Managed Agents) run assigned issues
-      // only; the fix is assigning an issue, not sending another chat turn.
+      // Claude Managed Agents runs assigned issues only; the fix is assigning
+      // an issue, not sending another chat turn.
       return t("failure.chat_unsupported");
     default:
       return t("failure.default");

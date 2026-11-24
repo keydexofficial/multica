@@ -13,8 +13,8 @@ func TestOMAProviderIdentityAndCapabilities(t *testing.T) {
 	if got := cloudAgentConnectionName("oma_cloud"); got != "OMA Managed Agents" {
 		t.Fatalf("connection name = %q", got)
 	}
-	if cloudAgentSupportsChat("oma_cloud") || cloudAgentSupportsQuickCreate("oma_cloud") {
-		t.Fatal("OMA advertised chat or quick-create")
+	if !cloudAgentSupportsChat("oma_cloud") || cloudAgentSupportsQuickCreate("oma_cloud") {
+		t.Fatal("OMA capabilities incorrect")
 	}
 	if !isCloudAgentProvider("oma_cloud") {
 		t.Fatal("OMA is not a cloud provider")

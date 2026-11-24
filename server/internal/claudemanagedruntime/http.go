@@ -8,12 +8,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// errTooLarge marks a file download that exceeded the caller's limit.
+var errTooLarge = errors.New("file exceeds size limit")
 
 // DefaultAnthropicURL is the Claude Managed Agents API base.
 const DefaultAnthropicURL = "https://api.anthropic.com/v1"
@@ -116,12 +121,116 @@ func (a *api) call(ctx context.Context, method, path string, in, out any) error 
 		}
 		body = bytes.NewReader(b)
 	}
+	return a.do(ctx, method, path, "application/json", body, out)
+}
+
+// withBeta returns a client whose anthropic-beta header also names beta. The
+// provider may require a different beta grant for a non-session endpoint.
+func (a *api) withBeta(beta string) *api {
+	clone := *a
+	clone.headers = make(map[string]string, len(a.headers)+1)
+	for name, value := range a.headers {
+		clone.headers[name] = value
+	}
+	if existing := strings.TrimSpace(clone.headers["anthropic-beta"]); existing != "" {
+		clone.headers["anthropic-beta"] = existing + ", " + beta
+	} else {
+		clone.headers["anthropic-beta"] = beta
+	}
+	return &clone
+}
+
+// upload sends one multipart file. The part carries contentType when it is
+// known: the provider stores that header as the file's MIME type, so an image
+// must not arrive as application/octet-stream.
+func (a *api) upload(ctx context.Context, path, name, contentType string, data []byte, fields map[string]string, out any) error {
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	header := make(textproto.MIMEHeader)
+	header.Set("Content-Disposition", fmt.Sprintf(`form-data; name="file"; filename="%s"`, escapeMultipartName(name)))
+	if contentType != "" {
+		header.Set("Content-Type", contentType)
+	}
+	part, err := w.CreatePart(header)
+	if err != nil {
+		return err
+	}
+	if _, err := part.Write(data); err != nil {
+		return err
+	}
+	for key, value := range fields {
+		if err := w.WriteField(key, value); err != nil {
+			return err
+		}
+	}
+	if err := w.Close(); err != nil {
+		return err
+	}
+	return a.do(ctx, http.MethodPost, path, w.FormDataContentType(), &body, out)
+}
+
+func escapeMultipartName(name string) string {
+	return strings.NewReplacer("\\", "\\\\", `"`, "\\\"", "\r", "_", "\n", "_").Replace(name)
+}
+
+// download fetches at most limit bytes. A relative path uses this client's
+// credentials; an absolute URL is a pre-signed storage link and gets none. The
+// storage hop may redirect, so this follows redirects and Go drops the
+// credential on a cross-host hop.
+func (a *api) download(ctx context.Context, rawPath string, limit int64) ([]byte, error) {
+	relative := strings.HasPrefix(rawPath, "/") && !strings.HasPrefix(rawPath, "//")
+	target := rawPath
+	if relative {
+		target = a.base + rawPath
+	} else if parsed, err := url.Parse(rawPath); err != nil || (parsed.Scheme != "https" && !(parsed.Scheme == "http" && strings.HasPrefix(a.base, "http://"))) {
+		return nil, fmt.Errorf("invalid download URL")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return nil, fmt.Errorf("invalid download URL")
+	}
+	if relative {
+		req.Header.Set("Authorization", "Bearer "+a.token)
+		req.Header.Set("Accept", "application/octet-stream")
+		for name, value := range a.headers {
+			req.Header.Set(name, value)
+		}
+	}
+	client := &http.Client{Timeout: 2 * time.Minute, Transport: a.client.Transport}
+	resp, err := client.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, fmt.Errorf("download transport failed")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, &apiError{
+			Status:               resp.StatusCode,
+			RetryAfter:           parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()),
+			WorkspaceKeyRequired: a.detectWorkspaceKey && resp.StatusCode >= 400 && resp.StatusCode < 500 && requiresWorkspaceHeader(resp.Body),
+		}
+	}
+	b, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return nil, fmt.Errorf("read API response failed")
+	}
+	if int64(len(b)) > limit {
+		return nil, errTooLarge
+	}
+	return b, nil
+}
+
+func (a *api) do(ctx context.Context, method, path, contentType string, body io.Reader, out any) error {
 	req, err := http.NewRequestWithContext(ctx, method, a.base+path, body)
 	if err != nil {
 		return fmt.Errorf("build API request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+a.token)
-	req.Header.Set("Content-Type", "application/json")
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
 	req.Header.Set("Accept", "application/json")
 	for name, value := range a.headers {
 		req.Header.Set(name, value)

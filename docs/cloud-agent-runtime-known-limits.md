@@ -181,10 +181,16 @@ Claude Managed Agents 和 OMA Managed Agents 的 v1 则直接拒绝 quick-create
 本仓库新增的 `oma_cloud` 采用与 Claude/Qoder 相同的绑定模型：
 
 - 不能创建 OMA 侧 agent 或 environment；必须绑定已有 `oma_agent_id` 和已有 `environment_id`。
-- 仅支持 issue 执行；chat、quick-create、attachments、local directory 不支持。
-- tool 必须配置为 `always_allow`；`requires_action` 视为失败。
+- 支持 issue 与 chat：
+  - issue 行为与 Claude/Qoder 的 issue 路径一致。
+  - chat 支持文本、图片和文件附件：图片作为消息内容块，其他文件上传到 OMA Files 后挂载到 session；单个附件上限 5 MB，超出或类型被拒时在 prompt 中列为不可用。
+  - chat 中 agent 写到 `/mnt/user-data/outputs/` 的文件会按 session 文件资源读取、下载并附加到回复；单个文件上限 10 MB，无法附加时回复中带提示。
+  - chat 仍要求 OMA agent 能自主执行；`requires_action` 会让运行失败。
+- quick-create、local directory 不支持。
+- tool 必须配置为 `always_allow`。
 - OMA 侧模型、工具、skill 在 OMA agent 上配置。
 - 本仓库额外为 OMA profile 增加了 usage 上报；Claude 路径仍保留 PR #9761 中“usage/billing reporting 未实现”的限制。
+- chat 能力只在 OMA profile 打开；Claude Managed Agents 仍为 issue-only。
 
 实现与设计细节见 `docs/oma-cloud-runtime.md`。
 

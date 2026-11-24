@@ -435,11 +435,16 @@ func (b *Bridge) stepRun(ctx context.Context, r *run) error {
 	if r.Phase == "prepared" {
 		// Resolve credentials before reusing a session too, so a revoked or
 		// changed repository credential is never carried into a follow-up.
-		resources, err := b.sessionResources(r.Resources)
+		repositoryResources, err := b.sessionResources(r.Resources)
 		if err != nil {
 			return b.reject(ctx, r, err.Error())
 		}
-		fingerprint := b.sessionFingerprint(resources)
+		fingerprint := b.sessionFingerprint(repositoryResources)
+		// Chat attachments join the session as file resources. They stay out of
+		// the repository fingerprint so a follow-up can still continue a session
+		// created without them and mount this turn's files after the cursor.
+		resources := append([]map[string]any{}, repositoryResources...)
+		resources = append(resources, r.Files...)
 		if r.PriorSessionID != "" {
 			continued, err := b.continueSession(ctx, r, fingerprint)
 			if err != nil {
@@ -448,6 +453,26 @@ func (b *Bridge) stepRun(ctx context.Context, r *run) error {
 			if continued {
 				r.SessionID = r.PriorSessionID
 				r.Continued = true
+				// Snapshot the outputs already in the session so this turn only
+				// attaches files it produced. A failure here retries before the
+				// message is sent, so no file can arrive unrecorded.
+				if r.Reply != nil && r.Reply.Baseline == nil {
+					baseline, err := b.outputFileIDs(ctx, r.SessionID)
+					if definitelyRejected(err) {
+						// The earlier session cannot be listed; start a new one
+						// rather than retrying a session the provider refused.
+						r.SessionID, r.PriorSessionID, r.Continued = "", "", false
+						r.Cursor, r.CursorAt = "", ""
+						r.UsageBase, r.UsageReported = sessionUsage{}, false
+						r.Reply.resetForNewSession()
+						r.Phase = "prepared"
+						return b.persist()
+					}
+					if err != nil {
+						return err
+					}
+					r.Reply.Baseline = baseline
+				}
 				r.Phase = "created"
 				if err := b.persist(); err != nil {
 					return err
@@ -463,6 +488,57 @@ func (b *Bridge) stepRun(ctx context.Context, r *run) error {
 	if err := b.taskCall(ctx, r, "/session", map[string]string{"session_id": r.SessionID}, nil); err != nil {
 		return err
 	}
+	if r.Phase == "created" && r.Continued && r.Cursor == "" {
+		latestID, err := b.latestEventID(ctx, r.SessionID)
+		if definitelyRejected(err) {
+			// The earlier session is gone; nothing was sent yet, so start fresh.
+			r.SessionID, r.PriorSessionID, r.Continued = "", "", false
+			r.Cursor, r.CursorAt = "", ""
+			r.UsageBase, r.UsageReported = sessionUsage{}, false
+			if r.Reply != nil {
+				r.Reply.resetForNewSession()
+			}
+			r.Phase = "prepared"
+			return b.persist()
+		}
+		if err != nil {
+			return err
+		}
+		r.Cursor, r.CursorAt = latestID, ""
+		if err := b.persist(); err != nil {
+			return err
+		}
+	}
+	if r.Phase == "created" && r.Continued {
+		// A continued session lacks this turn's files; mount them before the
+		// message that names them. The cursor is already set, so the mounts do
+		// not read as this turn.
+		for r.MountedFiles < len(r.Files) {
+			err := b.anthropic.call(ctx, http.MethodPost, b.betaPath("/sessions/"+url.PathEscape(r.SessionID)+"/resources"), r.Files[r.MountedFiles], nil)
+			if rateLimited(err) {
+				r.RetryAt = time.Now().Add(retryDelay(err))
+				return b.persist()
+			}
+			if definitelyRejected(err) {
+				// Nothing was sent yet; start a fresh session with the files instead.
+				r.SessionID, r.PriorSessionID, r.Continued, r.Cursor, r.CursorAt = "", "", false, "", ""
+				r.UsageBase, r.UsageReported = sessionUsage{}, false
+				r.MountedFiles = 0
+				if r.Reply != nil {
+					r.Reply.resetForNewSession()
+				}
+				r.Phase = "prepared"
+				return b.persist()
+			}
+			if err != nil {
+				return err
+			}
+			r.MountedFiles++
+			if err := b.persist(); err != nil {
+				return err
+			}
+		}
+	}
 	if r.Phase == "created" {
 		// Save intent before POST. After an ambiguous response/restart, never resend automatically.
 		r.Phase = "sending"
@@ -470,7 +546,9 @@ func (b *Bridge) stepRun(ctx context.Context, r *run) error {
 		if err := b.persist(); err != nil {
 			return err
 		}
-		if err := b.anthropic.call(ctx, http.MethodPost, "/sessions/"+url.PathEscape(r.SessionID)+"/events", map[string]any{"events": userMessage(r.Prompt)}, nil); err != nil {
+		content := []map[string]any{{"type": "text", "text": r.Prompt}}
+		content = append(content, r.Images...)
+		if err := b.anthropic.call(ctx, http.MethodPost, "/sessions/"+url.PathEscape(r.SessionID)+"/events", map[string]any{"events": []map[string]any{{"type": "user.message", "content": content}}}, nil); err != nil {
 			if rateLimited(err) {
 				r.Phase = "created"
 				r.SubmissionDeadline = time.Time{}
@@ -481,7 +559,12 @@ func (b *Bridge) stepRun(ctx context.Context, r *run) error {
 				// The earlier session can no longer take messages; a definite
 				// rejection means nothing was delivered, so start a fresh session.
 				r.SessionID, r.PriorSessionID, r.Continued = "", "", false
+				r.Cursor, r.CursorAt = "", ""
 				r.UsageBase, r.UsageReported = sessionUsage{}, false
+				r.MountedFiles = 0
+				if r.Reply != nil {
+					r.Reply.resetForNewSession()
+				}
 				r.Phase = "prepared"
 				r.SubmissionDeadline = time.Time{}
 				return b.persist()
@@ -492,6 +575,7 @@ func (b *Bridge) stepRun(ctx context.Context, r *run) error {
 			return err
 		}
 		r.Phase = "running"
+		r.Images = nil
 		if err := b.persist(); err != nil {
 			return err
 		}
@@ -514,9 +598,11 @@ func (b *Bridge) finishIdle(ctx context.Context, r *run) error {
 	return b.deliver(ctx, r)
 }
 
-// userMessage is the event that hands the run's prompt to Claude.
-func userMessage(prompt string) []map[string]any {
-	return []map[string]any{{"type": "user.message", "content": []map[string]string{{"type": "text", "text": prompt}}}}
+// userMessage is the event that hands the run's prompt and images to the provider.
+func userMessage(prompt string, images []map[string]any) []map[string]any {
+	content := []map[string]any{{"type": "text", "text": prompt}}
+	content = append(content, images...)
+	return []map[string]any{{"type": "user.message", "content": content}}
 }
 
 // createSession starts the session with the prompt as its initial event, so
@@ -536,7 +622,7 @@ func (b *Bridge) createSession(ctx context.Context, r *run, resources []map[stri
 		return err
 	}
 	metadata := map[string]string{"multica_task_id": r.TaskID, "multica_workspace_id": b.cfg.WorkspaceID, resourcesMetadataKey: fingerprint}
-	request := map[string]any{"agent": r.AgentID, "environment_id": b.cfg.EnvironmentID, "title": "Multica run " + r.TaskID, "metadata": metadata, "resources": resources, "initial_events": userMessage(r.Prompt)}
+	request := map[string]any{"agent": r.AgentID, "environment_id": b.cfg.EnvironmentID, "title": "Multica run " + r.TaskID, "metadata": metadata, "resources": resources, "initial_events": userMessage(r.Prompt, r.Images)}
 	if len(b.cfg.VaultIDs) > 0 {
 		request["vault_ids"] = b.cfg.VaultIDs
 	}
@@ -558,6 +644,10 @@ func (b *Bridge) createSession(ctx context.Context, r *run, resources []map[stri
 	// started; its whole history belongs to this run.
 	r.SessionID = session.ID
 	r.Phase, r.Started = "running", true
+	r.Images = nil
+	if r.Reply != nil && r.Reply.Baseline == nil {
+		r.Reply.Baseline = []string{}
+	}
 	return b.persist()
 }
 
@@ -797,6 +887,19 @@ func ignoreMissing(err error) error {
 	return err
 }
 func (b *Bridge) deliver(ctx context.Context, r *run) error {
+	if r.Outcome == "completed" && r.Reply != nil {
+		if err := b.collectReplyFiles(ctx, r); err != nil {
+			return err
+		}
+		if r.Reply.Handled < len(r.Reply.Delivered) {
+			if err := b.transferNextReplyFile(ctx, r); err != nil {
+				return err
+			}
+			if r.Reply.Handled < len(r.Reply.Delivered) {
+				return nil
+			}
+		}
+	}
 	if err := b.reportUsage(ctx, r); err != nil {
 		return err
 	}
@@ -804,6 +907,9 @@ func (b *Bridge) deliver(ctx context.Context, r *run) error {
 	suffix := "/complete"
 	if r.Outcome == "completed" {
 		body["output"] = r.Output
+		if r.Reply != nil {
+			body["output"] = r.Reply.output(r.Output)
+		}
 	} else {
 		suffix = "/fail"
 		body["error"] = r.Failure
@@ -959,6 +1065,11 @@ func (b *Bridge) Check(ctx context.Context) error {
 }
 
 func (b *Bridge) guardedStep(ctx context.Context) error {
+	// The managed guard's 45-second lease starts when acquisition commits.
+	// Give the work its own 30 seconds after acquisition, within that lease:
+	// exceeding it would let another server instance acquire the same
+	// connection and run a concurrent step. Transfers are sized to fit one
+	// step instead (attachments are bounded, reply files go one per step).
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	if b.cfg.BeforeStep != nil {

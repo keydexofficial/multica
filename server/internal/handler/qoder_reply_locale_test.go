@@ -65,9 +65,11 @@ func TestChatNoticeLocaleFollowsDestination(t *testing.T) {
 	}
 }
 
-func TestOtherRuntimesDoNotLoadChatNoticeLocale(t *testing.T) {
+func TestRuntimesWithoutChatDoNotLoadChatNoticeLocale(t *testing.T) {
 	h := &Handler{}
-	if got := h.qoderChatNoticeLocale(context.Background(), db.AgentRuntime{Provider: "codex"}, db.AgentTaskQueue{}, db.ChatSession{}, "", ""); got != "" {
-		t.Fatalf("non-Qoder locale = %q", got)
+	for _, provider := range []string{"codex", "claude_managed"} {
+		if got := h.cloudChatNoticeLocale(context.Background(), db.AgentRuntime{Provider: provider}, db.AgentTaskQueue{}, db.ChatSession{}, "", ""); got != "" {
+			t.Fatalf("%s locale = %q, want none", provider, got)
+		}
 	}
 }

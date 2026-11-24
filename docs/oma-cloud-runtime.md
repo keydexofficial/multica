@@ -47,15 +47,15 @@
 
 ### 2.2 v1 非目标
 
-- chat 会话
 - quick-create
 - squad / leader
-- 附件与 reply files
 - 多仓库、非 github.com 主机
 - commit / tag checkout（仅 branch）
 - 工具审批（桥不回答确认请求）
 - session budget
 - SSE 实时流（沿用轮询 + journal 恢复）
+
+chat（文本、附件、回传文件）已实现，见本文第 15 节。
 
 ## 3. 总体架构
 
@@ -334,6 +334,10 @@ stateDiagram-v2
 | 目录 | `GET /v1/agents`、`GET /v1/environments?beta=true` |
 | 校验 environment/vault | `GET /v1/environments/{id}?beta=true`、`GET /v1/vaults/{id}?beta=true` |
 | 仓库资源 | `github_repository` + `url` + `authorization_token` + `checkout: {type: branch, name}` |
+| 上传 chat 附件 / 回传文件 | `POST /v1/files?beta=true`（multipart `file`） |
+| 挂载 chat 附件 | `POST /v1/sessions/{id}/resources?beta=true` + `{type:"file", file_id, mount_path}` |
+| 列回传文件 | `GET /v1/sessions/{id}/resources?beta=true&limit=100&page=` |
+| 下载回传文件 | `GET /v1/files/{id}?beta=true`、`GET /v1/files/{id}/content?beta=true` |
 | 用量 | `GET /v1/sessions/{id}` 的 `usage` |
 
 ## 9. 实施阶段
@@ -376,7 +380,7 @@ stateDiagram-v2
 
 实现记录（2026-11-23）：
 
-- `internal/cloudagent` 注册 `oma_cloud`：daemon 前缀 `oma-managed-`、service/connection 名称 `OMA Managed Agents`、lock seed `24`、supervisor lock `8193`、`ManagedDaemonOnly`，无 chat / quick-create 能力。
+- `internal/cloudagent` 注册 `oma_cloud`：daemon 前缀 `oma-managed-`、service/connection 名称 `OMA Managed Agents`、lock seed `24`、supervisor lock `8193`、`ManagedDaemonOnly`；chat 能力已启用，quick-create 能力保持关闭。
 - `claudemanagedruntime.OMAProfile()`：允许 HTTP、`?beta=true`、failure reason `oma_cloud_execution`、standalone 前缀 `oma-bridge-`、`oma_agent_id` 绑定、跳过 workspace key 探测、`UsageSession`。
 - 新增 provider 参数化连接引擎 `internal/handler/cloud_agent_connection.go`，OMA handler `internal/handler/oma_connection.go` 只提供配置编解码、输入校验、bridge 构造和目录/取消适配；settings 字段为 `base_url`、`api_token`、`environment_id` 等，`base_url` 必须包含 OMA `/v1` API 根。
 - 已注册路由：
@@ -401,12 +405,12 @@ stateDiagram-v2
 - `isCloudAgentProvider` / `cloudAgentServiceName` 覆盖 OMA。
 - `middleware/managed_daemon.go` 增加 `oma-managed-`。
 - daemon 注册校验与 `DaemonAuth` 前缀解析。
-- chat / quick-create 按能力位拒绝 OMA。
+- chat 按能力位允许 OMA，quick-create 按能力位拒绝 OMA。
 - agent 校验 `oma_agent_id`，拒绝 skills/model/custom env/args/mcp 覆盖。
 - issue lifecycle 与 workspace 删除的 provider 列表。
 - failure reason、metrics、task failure 文案。
 
-实现记录（2026-11-23）：以上项均由 `cloudagent` 注册表、capability 位、`cloudAgentConfigValidators` 和 `cloudagent.Providers()` 统一覆盖，没有在 handler 中新增 OMA 专用分支。测试补充：provider 身份/能力位、`oma_agent_id` 配置校验、override 拒绝、`oma-managed-` daemon 前缀，以及 chat/quick-create entrypoint 的 OMA 拒绝用例。
+实现记录（2026-11-23）：以上项均由 `cloudagent` 注册表、capability 位、`cloudAgentConfigValidators` 和 `cloudagent.Providers()` 统一覆盖，没有在 handler 中新增 OMA 专用分支。测试补充：provider 身份/能力位、`oma_agent_id` 配置校验、override 拒绝、`oma-managed-` daemon 前缀，以及 quick-create 的 OMA 拒绝用例；后续 chat 实现补上 OMA chat 放行用例。
 
 ### Phase 4 — 前端
 
@@ -448,8 +452,11 @@ stateDiagram-v2
 3. follow-up 续用 idle 会话；资源或凭据变化时新建。
 4. 仓库挂载 + 分支 push / 开 PR。
 5. usage 上报，续用不重复计费。
-6. pause / resume / disconnect / revoke。
-7. workspace 删除清理远端会话。
+6. chat 多轮：续聊、重复消息、取消。
+7. chat 附件：图片与普通文件；超限/被拒文件在 prompt 中提示。
+8. chat 回传文件：agent 写入 `/mnt/user-data/outputs/` 后附到回复；跨轮不重复。
+9. pause / resume / disconnect / revoke。
+10. workspace 删除清理远端会话。
 
 ### Phase 6 — 文档收尾
 
@@ -522,3 +529,20 @@ stateDiagram-v2
 - [ ] GitHub MCP + vault（如需自动开 PR）
 - [ ] 仓库 token / egress 凭据注入验证
 - [ ] 至少一次 issue 全流程联调
+- [ ] 至少一次 chat 全流程联调（文本、附件、回传文件）
+
+## 15. Chat 支持（已实现）
+
+- 能力位：`cloudagent` 中 `oma_cloud` 的 `Chat` 为 true；`claudemanagedruntime` 再用 `Profile.Chat` 保证 Claude 仍为 issue-only。
+- 续聊：沿用 Multica chat 的 `prior_session_id` 指针。发送前把会话最新事件写入 cursor，避免重复文本被误判为本轮开始。
+- 附件：
+  - 图片（PNG/JPEG/WebP/GIF，≤5 MB）上传 OMA Files，作为 `user.message` 的 `image` content block。
+  - 其他文件（≤5 MB）上传后挂载到 `/mnt/session/uploads/<task>/<name>`；新会话随 `resources` 创建，续聊在发送前逐个挂载。
+  - 无法传输的文件在 prompt 中列为不可用。
+- 回传文件：
+  - prompt 要求 agent 把文件写到 `/mnt/user-data/outputs/`。
+  - 完成时列出 `GET /v1/sessions/{id}/resources`，只取 outputs 前缀下且不在本轮基线中的文件。
+  - 下载前校验文件 `scope.id` 等于本 run 的 session；单个文件 ≤10 MB。
+  - 下载后通过 `POST /api/upload-file`（task token + `task_id`）附到回复；失败或超限写入本地化 delivery notice。
+- 未实现：`DeliverArtifacts` 自定义工具、chat 的 squad leader、quick-create。
+- 测试：`TestOMAChatRun`、`TestChatFollowUpSkipsEarlierIdenticalMessage`、`TestOMAChatNewSessionAttachments`、`TestOMAChatFollowUpMountsAttachments`、`TestOMAChatDeliversOutputFiles`、`TestOMAChatDeliversOnlyNewOutputFiles`、`TestOMAChatRefusesUnscopedOutputFile`、`TestClaudeProfileRejectsChat`。

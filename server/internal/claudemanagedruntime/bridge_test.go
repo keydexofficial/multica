@@ -56,6 +56,19 @@ type harness struct {
 	vaultIDs      []string
 	profile       Profile
 	runtimeConfig string
+
+	// Chat attachment and file-delivery observations.
+	uploadedFiles    []string
+	uploadedTypes    []string
+	initialContent   []map[string]any
+	sendContent      []map[string]any
+	initialResources []map[string]any
+	mountedFiles     []map[string]any
+	uploads          int
+	multicaUploads   []string
+	sessionResources []map[string]any
+	fileContent      map[string]string
+	fileScope        string
 }
 
 func setup(t *testing.T) *harness {
@@ -72,15 +85,20 @@ func setupWith(t *testing.T, profile Profile, runtimeConfigKey string) *harness 
 	h.task = &daemon.Task{ID: "task-1", RuntimeID: "runtime-1", WorkspaceID: workspaceID, IssueID: "issue-1", AuthToken: "mat_task", Agent: &daemon.AgentData{Instructions: "Run tests", RuntimeConfig: json.RawMessage(fmt.Sprintf(`{"%s":"agent_1"}`, runtimeConfigKey)), Skills: []daemon.SkillData{{Name: "multica-platform"}}}}
 	m := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if r.Header.Get("X-Workspace-ID") != workspaceID {
-			t.Error("missing workspace")
-		}
-		auth := "Bearer multica-secret"
-		if strings.HasPrefix(r.URL.Path, "/api/issues/") {
-			auth = "Bearer mat_task"
-		}
-		if r.Header.Get("Authorization") != auth {
-			t.Error("wrong credential scope")
+		// A storage download URL is pre-signed and carries no Multica headers.
+		if !strings.HasPrefix(r.URL.Path, "/download/") {
+			if r.Header.Get("X-Workspace-ID") != workspaceID {
+				t.Error("missing workspace")
+			}
+			auth := "Bearer multica-secret"
+			if strings.HasPrefix(r.URL.Path, "/api/issues/") ||
+				strings.HasPrefix(r.URL.Path, "/api/attachments/") ||
+				strings.HasSuffix(r.URL.Path, "/upload-file") {
+				auth = "Bearer mat_task"
+			}
+			if r.Header.Get("Authorization") != auth {
+				t.Error("wrong credential scope")
+			}
 		}
 		if r.Header.Get("X-Client-Capabilities") != "" {
 			t.Error("unsupported capabilities advertised")
@@ -91,6 +109,28 @@ func setupWith(t *testing.T, profile Profile, runtimeConfigKey string) *harness 
 			h.task = nil
 		case strings.HasPrefix(r.URL.Path, "/api/issues/"):
 			io.WriteString(w, `{"title":"Fix bug","description":"Use repository context"}`)
+		case strings.HasPrefix(r.URL.Path, "/api/attachments/"):
+			id := strings.TrimPrefix(r.URL.Path, "/api/attachments/")
+			filename, contentType := "notes.txt", "text/plain"
+			if id == "img-1" {
+				filename, contentType = "shot.png", "image/png"
+			}
+			json.NewEncoder(w).Encode(map[string]any{
+				"id": id, "filename": filename, "content_type": contentType,
+				"size_bytes": 5, "download_url": "http://" + r.Host + "/download/" + id,
+			})
+		case strings.HasPrefix(r.URL.Path, "/download/"):
+			io.WriteString(w, "hello")
+		case strings.HasSuffix(r.URL.Path, "/upload-file"):
+			h.uploads++
+			if err := r.ParseMultipartForm(1 << 20); err == nil {
+				if part, header, err := r.FormFile("file"); err == nil {
+					io.Copy(io.Discard, part)
+					part.Close()
+					h.multicaUploads = append(h.multicaUploads, header.Filename)
+				}
+			}
+			io.WriteString(w, `{"id":"att_1"}`)
 		case strings.HasSuffix(r.URL.Path, "/status"):
 			json.NewEncoder(w).Encode(map[string]string{"status": h.status})
 		case strings.HasSuffix(r.URL.Path, "/start"):
@@ -129,14 +169,29 @@ func setupWith(t *testing.T, profile Profile, runtimeConfigKey string) *harness 
 		switch {
 		case r.URL.Path == "/sessions" && r.Method == "POST":
 			h.creates++
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
 			var input struct {
 				Agent         string            `json:"agent"`
 				Metadata      map[string]string `json:"metadata"`
 				InitialEvents []event           `json:"initial_events"`
+				Resources     []map[string]any  `json:"resources"`
 				VaultIDs      []string          `json:"vault_ids"`
 			}
-			if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			if err := json.Unmarshal(body, &input); err != nil {
 				t.Fatal(err)
+			}
+			h.initialResources = input.Resources
+			var raw struct {
+				InitialEvents []struct {
+					Content []map[string]any `json:"content"`
+				} `json:"initial_events"`
+			}
+			_ = json.Unmarshal(body, &raw)
+			if len(raw.InitialEvents) > 0 {
+				h.initialContent = raw.InitialEvents[0].Content
 			}
 			lost := h.lostCreates > 0
 			if lost {
@@ -196,10 +251,23 @@ func setupWith(t *testing.T, profile Profile, runtimeConfigKey string) *harness 
 			}
 			json.NewEncoder(w).Encode(map[string]any{"data": data, "next_page": nil})
 		case r.URL.Path == "/sessions/sess_1/events" && r.Method == "POST":
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
 			var req struct {
 				Events []event `json:"events"`
 			}
-			json.NewDecoder(r.Body).Decode(&req)
+			json.Unmarshal(body, &req)
+			var raw struct {
+				Events []struct {
+					Content []map[string]any `json:"content"`
+				} `json:"events"`
+			}
+			json.Unmarshal(body, &raw)
+			if len(raw.Events) > 0 {
+				h.sendContent = raw.Events[0].Content
+			}
 			if len(req.Events) == 1 && req.Events[0].Type == "user.interrupt" {
 				h.cancels++
 				h.remoteStatus = "idle"
@@ -223,7 +291,83 @@ func setupWith(t *testing.T, profile Profile, runtimeConfigKey string) *harness 
 			if r.URL.Query().Get("page") != "" {
 				t.Error("event ID used as page cursor")
 			}
-			json.NewEncoder(w).Encode(map[string]any{"data": h.events})
+			data := h.events
+			if r.URL.Query().Get("order") == "desc" {
+				data = append([]map[string]any(nil), h.events...)
+				for i, j := 0, len(data)-1; i < j; i, j = i+1, j-1 {
+					data[i], data[j] = data[j], data[i]
+				}
+				if len(data) > 1 {
+					data = data[:1]
+				}
+			}
+			json.NewEncoder(w).Encode(map[string]any{"data": data})
+		case r.URL.Path == "/files" && r.Method == "POST":
+			if r.URL.Query().Get("beta") != "true" {
+				t.Error("provider file upload without beta")
+			}
+			if err := r.ParseMultipartForm(1 << 20); err != nil {
+				t.Fatal(err)
+			}
+			if _, header, err := r.FormFile("file"); err == nil {
+				h.uploadedFiles = append(h.uploadedFiles, header.Filename)
+				h.uploadedTypes = append(h.uploadedTypes, header.Header.Get("Content-Type"))
+			}
+			json.NewEncoder(w).Encode(map[string]any{"id": fmt.Sprintf("file_%d", len(h.uploadedFiles))})
+		case r.URL.Path == "/sessions/sess_1/resources" && r.Method == "POST":
+			if r.URL.Query().Get("beta") != "true" {
+				t.Error("provider resource mount without beta")
+			}
+			var resource map[string]any
+			json.NewDecoder(r.Body).Decode(&resource)
+			h.mountedFiles = append(h.mountedFiles, resource)
+			json.NewEncoder(w).Encode(map[string]any{"type": "file", "id": "sesrsc_1"})
+		case r.URL.Path == "/sessions/sess_1/resources" && r.Method == "GET":
+			if r.URL.Query().Get("beta") != "true" {
+				t.Error("provider resource list without beta")
+			}
+			json.NewEncoder(w).Encode(map[string]any{"data": h.sessionResources})
+		case strings.HasPrefix(r.URL.Path, "/files/") && strings.HasSuffix(r.URL.Path, "/content"):
+			if r.URL.Query().Get("beta") != "true" {
+				t.Error("provider file download without beta")
+			}
+			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/files/"), "/content")
+			content, ok := h.fileContent[id]
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", "application/octet-stream")
+			io.WriteString(w, content)
+		case strings.HasPrefix(r.URL.Path, "/files/"):
+			if r.URL.Query().Get("beta") != "true" {
+				t.Error("provider file metadata without beta")
+			}
+			id := strings.TrimPrefix(r.URL.Path, "/files/")
+			content, ok := h.fileContent[id]
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
+			name := "output.txt"
+			for _, resource := range h.sessionResources {
+				if resource["file_id"] != id {
+					continue
+				}
+				if mount, _ := resource["mount_path"].(string); mount != "" {
+					parts := strings.Split(mount, "/")
+					name = parts[len(parts)-1]
+				}
+			}
+			scope := h.fileScope
+			if scope == "" {
+				scope = "sess_1"
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{
+				"id": id, "filename": name, "size_bytes": len(content),
+				"scope": map[string]any{"id": scope, "type": "session"}, "downloadable": true,
+			})
 		case r.URL.Path == "/sessions/sess_1":
 			session := fixture(t, "session_get.json")
 			session["status"] = "idle"
@@ -311,6 +455,230 @@ func TestOMAIssueRun(t *testing.T) {
 	}
 	if h.creates != 1 || h.initialEvents != 1 || h.sends != 0 || len(h.messages) != 1 || h.b.state.first() != nil {
 		t.Fatalf("incorrect OMA lifecycle: creates=%d initial_events=%d sends=%d", h.creates, h.initialEvents, h.sends)
+	}
+}
+
+// chatTask turns the claimed task into a chat turn served by the OMA profile.
+func chatTask(h *harness, message string) {
+	h.task.IssueID = ""
+	h.task.ChatSessionID = "chat-1"
+	h.task.ChatMessage = message
+}
+
+func TestOMAChatRun(t *testing.T) {
+	h := setupOMA(t)
+	chatTask(h, "Explain the build")
+	if err := h.b.step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if h.complete != nil {
+		t.Fatal("completed before the agent replied")
+	}
+	for _, want := range []string{"chatting with a user", "Run: task-1", "Explain the build"} {
+		if !strings.Contains(h.prompt, want) {
+			t.Fatalf("chat prompt missing %q: %s", want, h.prompt)
+		}
+	}
+	for _, unwanted := range []string{"Complete the following Multica issue", "pull request", "read issue"} {
+		if strings.Contains(h.prompt, unwanted) {
+			t.Fatalf("chat prompt carried issue-only %q: %s", unwanted, h.prompt)
+		}
+	}
+	h.finish("end_turn")
+	if err := h.b.step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if h.complete["session_id"] != "sess_1" || !strings.Contains(fmt.Sprint(h.complete["output"]), "Tests passed") {
+		t.Fatalf("result: %#v", h.complete)
+	}
+	if h.creates != 1 || h.initialEvents != 1 || h.sends != 0 || h.b.state.first() != nil {
+		t.Fatalf("incorrect chat lifecycle: creates=%d initial_events=%d sends=%d", h.creates, h.initialEvents, h.sends)
+	}
+}
+
+func TestOMAChatNewSessionAttachments(t *testing.T) {
+	h := setupOMA(t)
+	chatTask(h, "Read these")
+	h.task.ChatMessageAttachments = []daemon.ChatAttachmentMeta{
+		{ID: "img-1", Filename: "shot.png", ContentType: "image/png"},
+		{ID: "doc-1", Filename: "notes.txt", ContentType: "text/plain"},
+	}
+	if err := h.b.step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if h.failure != nil {
+		t.Fatalf("run failed: %v", h.failure)
+	}
+	if len(h.uploadedFiles) != 2 || h.uploadedFiles[0] != "shot.png" || h.uploadedFiles[1] != "notes.txt" {
+		t.Fatalf("provider uploads = %v", h.uploadedFiles)
+	}
+	if len(h.uploadedTypes) != 2 || h.uploadedTypes[0] != "image/png" || h.uploadedTypes[1] != "text/plain" {
+		t.Fatalf("provider upload types = %v", h.uploadedTypes)
+	}
+	if !strings.Contains(h.prompt, "- /mnt/session/uploads/task-1/notes.txt (mounted file)") {
+		t.Fatalf("mounted file missing from prompt: %s", h.prompt)
+	}
+	if !strings.Contains(h.prompt, "- shot.png (image attached to this message)") {
+		t.Fatalf("image missing from prompt: %s", h.prompt)
+	}
+	if len(h.initialContent) != 2 || h.initialContent[1]["type"] != "image" {
+		t.Fatalf("initial content = %#v", h.initialContent)
+	}
+	source, _ := h.initialContent[1]["source"].(map[string]any)
+	if source["type"] != "file" || source["file_id"] != "file_1" {
+		t.Fatalf("image source = %#v", source)
+	}
+	if len(h.initialResources) != 1 || h.initialResources[0]["mount_path"] != "/mnt/session/uploads/task-1/notes.txt" {
+		t.Fatalf("session resources = %#v", h.initialResources)
+	}
+	if h.creates != 1 {
+		t.Fatalf("creates = %d", h.creates)
+	}
+}
+
+func TestOMAChatFollowUpMountsAttachments(t *testing.T) {
+	h := setupOMA(t)
+	chatTask(h, "One more look")
+	h.task.PriorSessionID = "sess_1"
+	h.priorMetadata = map[string]string{resourcesMetadataKey: resourceFingerprint(nil)}
+	h.task.ChatMessageAttachments = []daemon.ChatAttachmentMeta{
+		{ID: "img-1", Filename: "shot.png", ContentType: "image/png"},
+		{ID: "doc-1", Filename: "notes.txt", ContentType: "text/plain"},
+	}
+	if err := h.b.step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if h.failure != nil {
+		t.Fatalf("run failed: %v", h.failure)
+	}
+	if h.creates != 0 || h.sends != 1 {
+		t.Fatalf("creates=%d sends=%d, want the prior session continued", h.creates, h.sends)
+	}
+	if len(h.mountedFiles) != 1 || h.mountedFiles[0]["mount_path"] != "/mnt/session/uploads/task-1/notes.txt" {
+		t.Fatalf("mounted files = %#v", h.mountedFiles)
+	}
+	if len(h.sendContent) != 2 || h.sendContent[1]["type"] != "image" {
+		t.Fatalf("sent content = %#v", h.sendContent)
+	}
+}
+
+func outputResource(fileID, mountPath string) map[string]any {
+	return map[string]any{"type": "file", "file_id": fileID, "mount_path": mountPath}
+}
+
+func TestOMAChatDeliversOutputFiles(t *testing.T) {
+	h := setupOMA(t)
+	chatTask(h, "Write the report")
+	h.sessionResources = []map[string]any{outputResource("file_out", "/mnt/user-data/outputs/report.txt")}
+	h.fileContent = map[string]string{"file_out": "report body"}
+	if err := h.b.step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(h.prompt, "Files you write under /mnt/user-data/outputs/ are attached to your reply") {
+		t.Fatalf("prompt missing the output-file instruction: %s", h.prompt)
+	}
+	h.finish("end_turn")
+	if err := h.b.step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if h.uploads != 1 || len(h.multicaUploads) != 1 || h.multicaUploads[0] != "report.txt" {
+		t.Fatalf("uploads=%d names=%v", h.uploads, h.multicaUploads)
+	}
+	if h.complete == nil || !strings.Contains(fmt.Sprint(h.complete["output"]), "Tests passed") {
+		t.Fatalf("complete = %#v", h.complete)
+	}
+	if strings.Contains(fmt.Sprint(h.complete["output"]), "Attachment delivery notice") {
+		t.Fatalf("unexpected delivery notice: %v", h.complete["output"])
+	}
+}
+
+// A continued chat must attach only the files its own turn produced.
+func TestOMAChatDeliversOnlyNewOutputFiles(t *testing.T) {
+	h := setupOMA(t)
+	chatTask(h, "Add another file")
+	h.task.PriorSessionID = "sess_1"
+	h.priorMetadata = map[string]string{resourcesMetadataKey: resourceFingerprint(nil)}
+	h.sessionResources = []map[string]any{outputResource("file_old", "/mnt/user-data/outputs/earlier.txt")}
+	if err := h.b.step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	h.sessionResources = append(h.sessionResources, outputResource("file_new", "/mnt/user-data/outputs/new.txt"))
+	h.fileContent = map[string]string{
+		"file_old": "earlier body",
+		"file_new": "new body",
+	}
+	h.finish("end_turn")
+	if err := h.b.step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if h.uploads != 1 || len(h.multicaUploads) != 1 || h.multicaUploads[0] != "new.txt" {
+		t.Fatalf("uploads=%d names=%v, want only new.txt", h.uploads, h.multicaUploads)
+	}
+}
+
+func TestOMAChatRefusesUnscopedOutputFile(t *testing.T) {
+	h := setupOMA(t)
+	chatTask(h, "Write the report")
+	h.sessionResources = []map[string]any{outputResource("file_out", "/mnt/user-data/outputs/report.txt")}
+	h.fileContent = map[string]string{"file_out": "report body"}
+	h.fileScope = "another_session"
+	if err := h.b.step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	h.finish("end_turn")
+	if err := h.b.step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if h.uploads != 0 {
+		t.Fatalf("uploads = %d, want the unscoped file refused", h.uploads)
+	}
+	if h.complete == nil || !strings.Contains(fmt.Sprint(h.complete["output"]), "access to the file could not be verified") {
+		t.Fatalf("complete = %#v, want a delivery notice", h.complete)
+	}
+}
+
+func TestClaudeProfileRejectsChat(t *testing.T) {
+	h := setup(t)
+	chatTask(h, "hi")
+	if err := h.b.step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if h.creates != 0 || h.failure == nil || !strings.Contains(fmt.Sprint(h.failure["error"]), "chat runs are not supported") {
+		t.Fatalf("creates=%d failure=%v, want a chat refusal", h.creates, h.failure)
+	}
+}
+
+// A continued chat whose earlier turn used the same words must not treat that
+// earlier turn's idle event as this run's completion.
+func TestChatFollowUpSkipsEarlierIdenticalMessage(t *testing.T) {
+	h := setupOMA(t)
+	chatTask(h, "hi")
+	h.task.PriorSessionID = "sess_1"
+	h.priorMetadata = map[string]string{resourcesMetadataKey: resourceFingerprint(nil)}
+	old := []map[string]any{
+		{"id": "evt_old_user", "type": "user.message", "content": []map[string]string{{"type": "text", "text": "hi"}}, "processed_at": "2026-01-01T00:00:00Z"},
+		{"id": "evt_old_reply", "type": "agent.message", "content": []map[string]string{{"type": "text", "text": "old reply"}}, "processed_at": "2026-01-01T00:00:01Z"},
+		{"id": "evt_old_idle", "type": "session.status_idle", "stop_reason": map[string]string{"type": "end_turn"}, "processed_at": "2026-01-01T00:00:02Z"},
+	}
+	h.events = old
+	h.history = func(prompt string) []map[string]any {
+		return append(append([]map[string]any{}, old...),
+			map[string]any{"id": "evt_new_user", "type": "user.message", "content": []map[string]string{{"type": "text", "text": prompt}}, "processed_at": "2026-01-02T00:00:00Z"},
+			map[string]any{"id": "evt_new_reply", "type": "agent.message", "content": []map[string]string{{"type": "text", "text": "new reply"}}, "processed_at": "2026-01-02T00:00:01Z"},
+			map[string]any{"id": "evt_new_idle", "type": "session.status_idle", "stop_reason": map[string]string{"type": "end_turn"}, "processed_at": "2026-01-02T00:00:02Z"},
+		)
+	}
+	if err := h.b.step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if h.creates != 0 || h.sends != 1 {
+		t.Fatalf("creates=%d sends=%d, want the idle prior session continued", h.creates, h.sends)
+	}
+	if h.complete == nil || h.complete["output"] != "new reply" {
+		t.Fatalf("complete = %#v, want this turn's reply", h.complete)
+	}
+	if h.b.state.first() != nil {
+		t.Fatal("run was not removed after completion")
 	}
 }
 

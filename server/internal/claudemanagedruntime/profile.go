@@ -15,6 +15,10 @@ type Profile struct {
 	AgentBindingError         string
 	SkipWorkspaceKeyDetection bool
 	Usage                     UsageMode
+	// Chat lets the bridge accept conversation turns. Cloud providers that
+	// expose no chat capability are never sent one, and this keeps a standalone
+	// bridge from silently running a task its documented contract excludes.
+	Chat bool
 }
 
 func ClaudeProfile() Profile {
@@ -45,6 +49,7 @@ func OMAProfile() Profile {
 		AgentBindingError:         "associate an OMA agent in the Multica agent runtime configuration",
 		SkipWorkspaceKeyDetection: true,
 		Usage:                     UsageSession,
+		Chat:                      true,
 	}
 }
 
@@ -58,6 +63,7 @@ func normalizeProfile(profile Profile) Profile {
 		profile.AllowPlainHTTP = true
 		profile.BetaQuery = true
 		profile.SkipWorkspaceKeyDetection = true
+		profile.Chat = true
 	}
 	if profile.DisplayName == "" {
 		profile.DisplayName = defaults.DisplayName

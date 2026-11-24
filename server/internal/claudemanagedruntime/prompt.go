@@ -15,8 +15,12 @@ func (b *Bridge) prepare(ctx context.Context, t *claimedTask) (*run, error) {
 	if t.RuntimeID != b.state.RuntimeID || t.WorkspaceID != b.cfg.WorkspaceID {
 		return nil, fmt.Errorf("claim identity does not match bridge")
 	}
-	if t.IssueID == "" || t.ChatSessionID != "" || t.IsLeaderTask {
-		return nil, fmt.Errorf("%s bridge currently supports issue runs only", b.profile.DisplayName)
+	chat := t.ChatSessionID != ""
+	if (t.IssueID != "") == chat || t.IsLeaderTask {
+		return nil, fmt.Errorf("%s bridge supports issue and chat runs only", b.profile.DisplayName)
+	}
+	if chat && !b.profile.Chat {
+		return nil, fmt.Errorf("chat runs are not supported by the %s bridge", b.profile.DisplayName)
 	}
 	if !strings.HasPrefix(t.AuthToken, "mat_") {
 		return nil, fmt.Errorf("claim is missing a task-scoped credential")
@@ -37,24 +41,41 @@ func (b *Bridge) prepare(ctx context.Context, t *claimedTask) (*run, error) {
 	r.AgentID = binding.AgentID
 	taskAPI := *b.multica
 	taskAPI.token = t.AuthToken
-	var issue struct {
-		Title       string            `json:"title"`
-		Description string            `json:"description"`
-		Attachments []json.RawMessage `json:"attachments"`
-	}
-	if err := taskAPI.call(ctx, http.MethodGet, "/api/issues/"+url.PathEscape(t.IssueID), nil, &issue); err != nil {
-		return nil, fmt.Errorf("read issue: %w", err)
-	}
-	if len(issue.Attachments) > 0 {
-		return nil, fmt.Errorf("issue attachments are not supported by the %s bridge", b.profile.DisplayName)
-	}
 	var p strings.Builder
-	fmt.Fprintf(&p, "Complete the following Multica issue in your %s environment. Return a final summary including code changes, tests and branch/PR/MR links when available. This bridge does not expose a local Multica daemon.\n", b.profile.DisplayName)
-	if t.PriorSessionID != "" {
-		r.PriorSessionID = t.PriorSessionID
-		p.WriteString("This is a follow-up on the same issue. If the earlier conversation is not in your context, rely on the issue and comments below.\n")
+	var issueTitle string
+	if chat {
+		r.Reply = &chatReply{token: t.AuthToken, Locale: t.ChatNoticeLocale}
+		p.WriteString("You are chatting with a user of a Multica workspace. Reply directly to their message; your final message is shown to them as your reply. This bridge does not expose a local Multica daemon.\n")
+		p.WriteString(chatAudience(t.ChatChannelType, t.ChatType))
+		fmt.Fprintf(&p, "Files you write under %s are attached to your reply. A file over %d MB is not attached; tell the user instead of saying it was sent.\n", outputDirPrefix, maxReplyFileBytes>>20)
+		if t.PriorSessionID != "" {
+			r.PriorSessionID = t.PriorSessionID
+			p.WriteString("This continues an earlier conversation. If it is not in your context, answer from the message below.\n")
+		}
+		fmt.Fprintf(&p, "\nRun: %s\n\nUser message:\n%s\n", t.ID, t.ChatMessage)
+		if err := b.attachChatFiles(ctx, &taskAPI, t, r, &p); err != nil {
+			return nil, err
+		}
+	} else {
+		var issue struct {
+			Title       string            `json:"title"`
+			Description string            `json:"description"`
+			Attachments []json.RawMessage `json:"attachments"`
+		}
+		if err := taskAPI.call(ctx, http.MethodGet, "/api/issues/"+url.PathEscape(t.IssueID), nil, &issue); err != nil {
+			return nil, fmt.Errorf("read issue: %w", err)
+		}
+		if len(issue.Attachments) > 0 {
+			return nil, fmt.Errorf("issue attachments are not supported by the %s bridge", b.profile.DisplayName)
+		}
+		issueTitle = issue.Title
+		fmt.Fprintf(&p, "Complete the following Multica issue in your %s environment. Return a final summary including code changes, tests and branch/PR/MR links when available. This bridge does not expose a local Multica daemon.\n", b.profile.DisplayName)
+		if t.PriorSessionID != "" {
+			r.PriorSessionID = t.PriorSessionID
+			p.WriteString("This is a follow-up on the same issue. If the earlier conversation is not in your context, rely on the issue and comments below.\n")
+		}
+		fmt.Fprintf(&p, "\nRun: %s\nIssue: %s\n\n%s\n\n%s\n", t.ID, t.IssueIdentifier, issue.Title, issue.Description)
 	}
-	fmt.Fprintf(&p, "\nRun: %s\nIssue: %s\n\n%s\n\n%s\n", t.ID, t.IssueIdentifier, issue.Title, issue.Description)
 	if t.Agent != nil {
 		fmt.Fprintf(&p, "\nAgent instructions:\n%s\n", t.Agent.Instructions)
 	}
@@ -108,14 +129,31 @@ func (b *Bridge) prepare(ctx context.Context, t *claimedTask) (*run, error) {
 		fmt.Fprintf(&p, "\nAvailable repository: %s (%s)\n", repo.URL, repo.Description)
 	}
 	// Vaults can give the session tools that reach other repositories (a
-	// GitHub MCP server), so the run is told exactly which one it may change.
-	if len(r.Resources) == 0 {
-		p.WriteString("\nNo repository is mounted for this run. Do not create branches, commits or pull requests in any repository, including repositories your tools can reach; describe the change you would make in your final summary instead.\n")
-	} else if t.IssueIdentifier != "" {
-		fmt.Fprintf(&p, "\nChange only the mounted repository %s. When you change code, push a new branch named %s (never the default branch), open a pull request in that repository whose title starts with \"%s: \", and put the pull request link in your final summary. Multica links the pull request to this issue through that identifier.\n", r.Resources[0]["url"], BranchName(t.IssueIdentifier, issue.Title), t.IssueIdentifier)
+	// GitHub MCP server), so an issue run is told exactly which one it may
+	// change. Chat is a conversation, so it never gets issue branch/PR rules.
+	if !chat {
+		if len(r.Resources) == 0 {
+			p.WriteString("\nNo repository is mounted for this run. Do not create branches, commits or pull requests in any repository, including repositories your tools can reach; describe the change you would make in your final summary instead.\n")
+		} else if t.IssueIdentifier != "" {
+			fmt.Fprintf(&p, "\nChange only the mounted repository %s. When you change code, push a new branch named %s (never the default branch), open a pull request in that repository whose title starts with \"%s: \", and put the pull request link in your final summary. Multica links the pull request to this issue through that identifier.\n", r.Resources[0]["url"], BranchName(t.IssueIdentifier, issueTitle), t.IssueIdentifier)
+		}
 	}
 	r.Prompt = p.String()
 	return r, nil
+}
+
+// chatAudience mirrors the local daemon's chat audience line: a group reply is
+// not private to its sender, and an IM chat of unknown type never defaults to
+// private. Kept local so the bridge stays independent of the daemon packages.
+func chatAudience(channelType, chatType string) string {
+	switch {
+	case chatType == "group":
+		return "Audience: group room; not private; unseen members may read replies.\n"
+	case chatType == "p2p" || channelType == "":
+		return "Audience: direct room.\n"
+	default:
+		return "Audience: direct room with the user.\n"
+	}
 }
 
 // Repository is a GitHub repository and optional branch mounted into a session.

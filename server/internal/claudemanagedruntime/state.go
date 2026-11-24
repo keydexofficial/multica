@@ -44,13 +44,23 @@ type run struct {
 	SessionID          string           `json:"session_id,omitempty"`
 	Prompt             string           `json:"prompt,omitempty"`
 	Resources          []map[string]any `json:"resources,omitempty"`
-	Phase              string           `json:"phase"`
-	Cursor             string           `json:"cursor,omitempty"`
-	Seq                int              `json:"seq"`
-	Started            bool             `json:"started"`
-	Output             string           `json:"output,omitempty"`
-	Failure            string           `json:"failure,omitempty"`
-	Outcome            string           `json:"outcome,omitempty"`
+	// Files are chat attachments uploaded to the provider and mounted into the
+	// session. Images go into the message instead. MountedFiles counts the
+	// files already added to a continued session, so a retry never mounts one
+	// twice.
+	Files        []map[string]any `json:"files,omitempty"`
+	Images       []map[string]any `json:"images,omitempty"`
+	MountedFiles int              `json:"mounted_files,omitempty"`
+	// Reply tracks files the agent produced under the session's outputs
+	// directory and the bridge's progress attaching them to the chat reply.
+	Reply   *chatReply `json:"reply,omitempty"`
+	Phase   string     `json:"phase"`
+	Cursor  string     `json:"cursor,omitempty"`
+	Seq     int        `json:"seq"`
+	Started bool       `json:"started"`
+	Output  string     `json:"output,omitempty"`
+	Failure string     `json:"failure,omitempty"`
+	Outcome string     `json:"outcome,omitempty"`
 	// IdleSince records when an end_turn idle event was received. It is cleared
 	// when the provider resumes the session.
 	IdleSince time.Time `json:"idle_since,omitempty"`
