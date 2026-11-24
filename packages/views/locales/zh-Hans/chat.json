@@ -40,6 +40,7 @@
     "send_blocked_toast": "消息未发送——你已没有该智能体的使用权限",
     "runtime_required_toast": "消息未发送——请先为该智能体绑定运行时",
     "runtime_access_denied_toast": "无法访问该智能体的私有运行时。请将该运行时设为公开，或将智能体绑定到可用的运行时。",
+    "chat_unsupported_toast": "消息未发送——该云端智能体仅运行指派给它的任务。请将任务指派给该智能体，而不是在聊天中发送消息。",
     "attachment_bind_failed_toast": "消息已发送，但文件未能附加。请稍后重试。",
     "add_tooltip": "添加",
     "upload_file": "图片或文件",

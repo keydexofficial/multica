@@ -8,10 +8,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/middleware"
+	"github.com/multica-ai/multica/server/internal/testutil"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -61,6 +63,44 @@ func TestSendChatMessage_ReportsPositionInsteadOfQueuedStatus(t *testing.T) {
 	}
 	if second := send("second"); !second.Queued {
 		t.Fatal("second task behind an in-flight head must be reported as queued")
+	}
+}
+
+func TestSendChatMessage_RefusesCloudAgentWithoutChat(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	// A cloud provider whose runtime cannot accept chat turns must answer with
+	// the structured chat_unsupported reason so clients can show the real cause
+	// instead of a generic send failure.
+	runtimeID := dbfx.Runtime(t, "OMA managed", testutil.Cols{
+		"provider":  "oma_cloud",
+		"daemon_id": "oma-managed-" + testWorkspaceID,
+	})
+	agentID := dbfx.Agent(t, "OMA chat agent", runtimeID)
+	sessionID := createHandlerTestChatSession(t, agentID)
+
+	req := newRequest("POST", "/api/chat-sessions/"+sessionID+"/messages", map[string]any{
+		"content": "hello",
+	})
+	req = withURLParam(req, "sessionId", sessionID)
+	req = withChatTestWorkspaceCtx(t, req)
+	w := httptest.NewRecorder()
+	testHandler.SendChatMessage(w, req)
+
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("SendChatMessage: expected 422, got %d: %s", w.Code, w.Body.String())
+	}
+	var body dispatchBlockedResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode refusal: %v", err)
+	}
+	if body.ReasonCode != ReasonChatUnsupported {
+		t.Fatalf("reason_code = %q, want %q", body.ReasonCode, ReasonChatUnsupported)
+	}
+	if !strings.Contains(body.Error, "OMA Managed Agents") {
+		t.Fatalf("fallback error = %q, want it to name the provider", body.Error)
 	}
 }
 

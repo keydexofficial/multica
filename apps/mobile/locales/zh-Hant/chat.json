@@ -76,6 +76,7 @@
     "invocation_not_allowed": "你已無權執行該 AI 代理，訊息未傳送。",
     "agent_runtime_required": "傳送訊息前，請先為該 AI 代理綁定執行時。",
     "runtime_access_denied": "訊息未傳送：{{detail}}",
+    "chat_unsupported": "該雲端 AI 代理僅執行指派給它的任務。請將任務指派給該 AI 代理，而不是在聊天中傳送訊息。",
     "default": "訊息無法傳送，請重試。",
     "runtime_access_recovery": "無法存取該 AI 代理的私有執行時。請將該執行時設為公開，或將 AI 代理綁定到可用的執行時。"
   },

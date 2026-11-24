@@ -40,6 +40,7 @@
     "send_blocked_toast": "訊息未傳送——你已沒有該 AI 代理的使用權限",
     "runtime_required_toast": "訊息未傳送——請先為該 AI 代理繫結執行時",
     "runtime_access_denied_toast": "無法存取此 AI 代理的私有執行時。請將該執行時設為公開，或將 AI 代理綁定到可存取的執行時。",
+    "chat_unsupported_toast": "訊息未傳送——該雲端 AI 代理僅執行指派給它的任務。請將任務指派給該 AI 代理，而不是在聊天中傳送訊息。",
     "attachment_bind_failed_toast": "訊息已傳送，但檔案未能附加。請稍後重試。",
     "add_tooltip": "新增",
     "upload_file": "圖片或檔案",

@@ -76,6 +76,7 @@
     "invocation_not_allowed": "You no longer have permission to run this agent, so the message was not sent.",
     "agent_runtime_required": "Bind a runtime to this agent before sending a message.",
     "runtime_access_denied": "Message not sent — {{detail}}",
+    "chat_unsupported": "This cloud agent only runs assigned issues. Assign an issue to this agent instead of chatting.",
     "default": "Your message could not be sent. Please try again.",
     "runtime_access_recovery": "This agent's private runtime isn't accessible. Make the runtime public, or bind the agent to an accessible runtime."
   },

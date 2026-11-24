@@ -194,7 +194,7 @@ vi.mock("@tanstack/react-query", async (importOriginal) => {
   };
 });
 
-import { useChatController } from "./use-chat-controller";
+import { chatSendFailureToastKey, useChatController } from "./use-chat-controller";
 import { api, ApiError } from "@multica/core/api";
 import { chatKeys } from "@multica/core/chat/queries";
 
@@ -257,6 +257,17 @@ function setup(
   h.archivedMutate.mockClear();
   return result;
 }
+
+describe("chatSendFailureToastKey", () => {
+  it("gives a cloud agent's missing chat support its own copy", () => {
+    expect(chatSendFailureToastKey("chat_unsupported")).toBe("chat_unsupported_toast");
+  });
+
+  it("falls back to the generic copy for an unknown or absent reason", () => {
+    expect(chatSendFailureToastKey("something_new")).toBe("send_failed_toast");
+    expect(chatSendFailureToastKey(undefined)).toBe("send_failed_toast");
+  });
+});
 
 describe("useChatController project context", () => {
   const project = {

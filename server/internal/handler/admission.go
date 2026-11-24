@@ -64,6 +64,7 @@ const (
 	ReasonRuntimeAccessDenied   = dispatch.ReasonRuntimeAccessDenied
 	ReasonRuntimeProfileMissing = dispatch.ReasonRuntimeProfileMissing
 	ReasonAgentRuntimeRequired  = dispatch.ReasonAgentRuntimeRequired
+	ReasonChatUnsupported       = dispatch.ReasonChatUnsupported
 	ReasonAttributionBlocked    = dispatch.ReasonAttributionBlocked
 	ReasonAlreadyActive         = dispatch.ReasonAlreadyActive
 	ReasonSelfTriggerSuppressed = dispatch.ReasonSelfTriggerSuppressed
@@ -134,6 +135,8 @@ func dispatchBlockedFallbackMessage(code DispatchReasonCode) string {
 		return "the target's agent CLI is missing a runtime profile on its machine"
 	case ReasonAgentRuntimeRequired:
 		return "the target needs a runtime"
+	case ReasonChatUnsupported:
+		return "the target only runs assigned issues and cannot chat"
 	case ReasonAttributionBlocked:
 		return "the run couldn't be attributed to a responsible member"
 	case ReasonAlreadyActive:

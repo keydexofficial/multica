@@ -64,6 +64,11 @@ const (
 	// collapse the two send the user looking for an offline computer that does
 	// not exist.
 	ReasonAgentRuntimeRequired ReasonCode = "agent_runtime_required"
+	// ReasonChatUnsupported: the target runs on a cloud-managed provider that
+	// executes assigned issues only and has no chat capability (OMA, Claude
+	// Managed Agents). Not a transient failure: nothing queues, and the caller's
+	// fix is to assign an issue instead of sending another chat turn.
+	ReasonChatUnsupported ReasonCode = "chat_unsupported"
 	// ReasonAttributionBlocked: a fail-closed workspace could not resolve a
 	// responsible human for the run, so it was refused.
 	ReasonAttributionBlocked ReasonCode = "attribution_blocked"

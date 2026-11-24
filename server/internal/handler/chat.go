@@ -982,7 +982,13 @@ func (h *Handler) SendChatMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if provider, ok := h.resolveAgentProvider(r, agent.WorkspaceID, agent.RuntimeID); ok && cloudagent.IsCloud(provider) && !cloudAgentSupportsChat(provider) {
-		writeError(w, http.StatusUnprocessableEntity, cloudAgentServiceName(provider)+" supports issue runs only; assign an issue to this agent instead of chatting")
+		// Structured reason so clients localize the refusal instead of toasting
+		// a generic send failure (chat_unsupported). The fallback message keeps
+		// the provider's service name for older clients that only read `error`.
+		writeJSON(w, http.StatusUnprocessableEntity, dispatchBlockedResponse{
+			Error:      cloudAgentServiceName(provider) + " supports issue runs only; assign an issue to this agent instead of chatting",
+			ReasonCode: ReasonChatUnsupported,
+		})
 		return
 	}
 

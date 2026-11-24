@@ -42,6 +42,7 @@
     "send_blocked_toast": "Message not sent — you no longer have permission to use this agent",
     "runtime_required_toast": "Message not sent — bind a runtime to this agent first",
     "runtime_access_denied_toast": "This agent's private runtime isn't accessible. Make the runtime public, or bind the agent to an accessible runtime.",
+    "chat_unsupported_toast": "Message not sent — this cloud agent only runs assigned issues. Assign an issue to this agent instead of chatting.",
     "attachment_bind_failed_toast": "Message sent, but files were not attached. Please try again in a moment.",
     "add_tooltip": "Add",
     "upload_file": "Images or files",

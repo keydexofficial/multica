@@ -71,6 +71,21 @@ describe("sendFailureMessage", () => {
     );
   });
 
+  // A cloud agent that runs assigned issues only will never accept a chat
+  // turn, so the alert must say that instead of suggesting a retry.
+  it("tells the user to assign an issue when chat is unsupported", () => {
+    const err = apiError({ reason_code: "chat_unsupported" });
+    expect(send("en", err)).toBe(
+      "This cloud agent only runs assigned issues. Assign an issue to this agent instead of chatting.",
+    );
+    expect(send("zh-Hans", err)).toBe(
+      "该云端智能体仅运行指派给它的任务。请将任务指派给该智能体，而不是在聊天中发送消息。",
+    );
+    expect(send("zh-Hant", err)).toBe(
+      "該雲端 AI 代理僅執行指派給它的任務。請將任務指派給該 AI 代理，而不是在聊天中傳送訊息。",
+    );
+  });
+
   it("falls back to a retryable message for anything else", () => {
     const err = new Error("timeout");
     expect(send("en", err)).toBe("Your message could not be sent. Please try again.");

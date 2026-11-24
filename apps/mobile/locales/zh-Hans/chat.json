@@ -76,6 +76,7 @@
     "invocation_not_allowed": "你已无权运行该智能体，消息未发送。",
     "agent_runtime_required": "发送消息前，请先为该智能体绑定运行时。",
     "runtime_access_denied": "消息未发送：{{detail}}",
+    "chat_unsupported": "该云端智能体仅运行指派给它的任务。请将任务指派给该智能体，而不是在聊天中发送消息。",
     "default": "消息无法发送，请重试。",
     "runtime_access_recovery": "无法访问该智能体的私有运行时。请将该运行时设为公开，或将智能体绑定到可用的运行时。"
   },

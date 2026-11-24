@@ -56,6 +56,34 @@ import { useAppForeground } from "../../common/use-app-foreground";
 const uiLogger = createLogger("chat.ui");
 const apiLogger = createLogger("chat.api");
 
+/** Localized copy key for a refused send. */
+type ChatSendFailureToastKey =
+  | "send_blocked_toast"
+  | "runtime_required_toast"
+  | "runtime_access_denied_toast"
+  | "chat_unsupported_toast"
+  | "send_failed_toast";
+
+/**
+ * Map a structured send refusal (MUL-4525) to the copy that names its cause.
+ * Unknown or absent reason codes — an older server, or a transport failure —
+ * fall back to the generic sentence.
+ */
+export function chatSendFailureToastKey(reason: string | undefined): ChatSendFailureToastKey {
+  switch (reason) {
+    case "invocation_not_allowed":
+      return "send_blocked_toast";
+    case "agent_runtime_required":
+      return "runtime_required_toast";
+    case "runtime_access_denied":
+      return "runtime_access_denied_toast";
+    case "chat_unsupported":
+      return "chat_unsupported_toast";
+    default:
+      return "send_failed_toast";
+  }
+}
+
 /**
  * After a send resolves: is the user still composing to the target they sent
  * from? Decides whether to scrub the composer and open the sent session, or
@@ -516,6 +544,9 @@ export function useChatController(opts?: { isActive?: boolean }) {
         return false;
       }
 
+      const sendFailureToast = (err: unknown) =>
+        t(($) => $.input[chatSendFailureToastKey(dispatchReasonCode(err))]);
+
       const finalContent = content;
       const isNewSession = !activeSessionId;
 
@@ -532,18 +563,7 @@ export function useChatController(opts?: { isActive?: boolean }) {
         sessionId = await ensureSession();
       } catch (err) {
         apiLogger.error("sendChatMessage.ensureSession.error", err);
-        // A revoked invoke permission blocks session create with a structured
-        // 403 (MUL-4525) — name the cause instead of a generic failure.
-        const reason = dispatchReasonCode(err);
-        toast.error(
-          reason === "invocation_not_allowed"
-            ? t(($) => $.input.send_blocked_toast)
-            : reason === "agent_runtime_required"
-              ? t(($) => $.input.runtime_required_toast)
-              : reason === "runtime_access_denied"
-                ? t(($) => $.input.runtime_access_denied_toast)
-                : t(($) => $.input.send_failed_toast),
-        );
+        toast.error(sendFailureToast(err));
         return false;
       }
       if (!sessionId) {
@@ -564,20 +584,7 @@ export function useChatController(opts?: { isActive?: boolean }) {
           : await api.sendChatMessage(sessionId, finalContent, attachmentIds);
       } catch (err) {
         apiLogger.error("sendChatMessage.error", { sessionId, err });
-        // Invoke permission can be revoked mid-session; the send is refused with
-        // a structured 403 before anything persists (MUL-4525). Surface the
-        // specific cause so the user knows it is a permission change, not a
-        // transient failure they should retry.
-        const reason = dispatchReasonCode(err);
-        toast.error(
-          reason === "invocation_not_allowed"
-            ? t(($) => $.input.send_blocked_toast)
-            : reason === "agent_runtime_required"
-              ? t(($) => $.input.runtime_required_toast)
-              : reason === "runtime_access_denied"
-                ? t(($) => $.input.runtime_access_denied_toast)
-                : t(($) => $.input.send_failed_toast),
-        );
+        toast.error(sendFailureToast(err));
         return false;
       }
       apiLogger.info("sendChatMessage.success", {
