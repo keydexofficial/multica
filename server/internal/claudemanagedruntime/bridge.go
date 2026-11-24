@@ -51,6 +51,9 @@ type Config struct {
 	RunTimeout        time.Duration `json:"-"`
 	SubmissionTimeout time.Duration `json:"-"`
 	PollInterval      time.Duration `json:"-"`
+	// IdleGrace delays completion after an end_turn idle event so a transient
+	// idle-to-running transition is not mistaken for task completion.
+	IdleGrace time.Duration `json:"-"`
 	// MaxConcurrency bounds simultaneous remote sessions; extra tasks stay queued in Multica.
 	MaxConcurrency int `json:"max_concurrency,omitempty"`
 }
@@ -98,6 +101,12 @@ func NewWithProfile(cfg Config, profile Profile, log *slog.Logger) (*Bridge, err
 	}
 	if cfg.PollInterval < time.Millisecond {
 		return nil, fmt.Errorf("poll interval must be positive")
+	}
+	if cfg.IdleGrace == 0 {
+		cfg.IdleGrace = 3 * time.Second
+	}
+	if cfg.IdleGrace < 0 {
+		return nil, fmt.Errorf("idle grace must not be negative")
 	}
 	if cfg.RunTimeout == 0 {
 		cfg.RunTimeout = time.Hour
@@ -487,7 +496,22 @@ func (b *Bridge) stepRun(ctx context.Context, r *run) error {
 			return err
 		}
 	}
-	return b.events(ctx, r)
+	if err := b.events(ctx, r); err != nil {
+		return err
+	}
+	return b.finishIdle(ctx, r)
+}
+
+func (b *Bridge) finishIdle(ctx context.Context, r *run) error {
+	if r.Phase != "idle" {
+		return nil
+	}
+	if !r.IdleSince.IsZero() && time.Since(r.IdleSince) < b.cfg.IdleGrace {
+		return nil
+	}
+	r.Phase = "final"
+	r.Outcome = "completed"
+	return b.deliver(ctx, r)
 }
 
 // userMessage is the event that hands the run's prompt to Claude.

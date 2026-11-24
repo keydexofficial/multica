@@ -239,7 +239,7 @@ func setupWith(t *testing.T, profile Profile, runtimeConfigKey string) *harness 
 	}))
 	t.Cleanup(q.Close)
 	var err error
-	h.b, err = NewWithProfile(Config{MulticaURL: m.URL, MulticaToken: "multica-secret", WorkspaceID: workspaceID, AnthropicURL: q.URL, AnthropicToken: "anthropic-secret", EnvironmentID: "env_1", StateDir: t.TempDir()}, h.profile, nil)
+	h.b, err = NewWithProfile(Config{MulticaURL: m.URL, MulticaToken: "multica-secret", WorkspaceID: workspaceID, AnthropicURL: q.URL, AnthropicToken: "anthropic-secret", EnvironmentID: "env_1", StateDir: t.TempDir(), IdleGrace: time.Nanosecond}, h.profile, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,6 +311,41 @@ func TestOMAIssueRun(t *testing.T) {
 	}
 	if h.creates != 1 || h.initialEvents != 1 || h.sends != 0 || len(h.messages) != 1 || h.b.state.first() != nil {
 		t.Fatalf("incorrect OMA lifecycle: creates=%d initial_events=%d sends=%d", h.creates, h.initialEvents, h.sends)
+	}
+}
+
+func TestTransientIdleDoesNotCompleteRun(t *testing.T) {
+	h := setup(t)
+	ctx := context.Background()
+	if err := h.b.step(ctx); err != nil {
+		t.Fatal(err)
+	}
+	h.b.cfg.IdleGrace = time.Hour
+	h.finish("end_turn")
+	if err := h.b.step(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if h.complete != nil {
+		t.Fatal("completed on an idle that the provider immediately resumed")
+	}
+	r := h.b.state.first()
+	if r == nil || r.Phase != "idle" {
+		t.Fatalf("run = %+v, want pending idle", r)
+	}
+	h.b.cfg.IdleGrace = time.Nanosecond
+	h.events = append(h.events, map[string]any{"id": "evt_resumed", "type": "session.status_running"})
+	if err := h.b.step(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if h.complete != nil || r.Phase != "running" {
+		t.Fatalf("resumed idle completed: complete=%v run=%+v", h.complete, r)
+	}
+	h.finish("end_turn")
+	if err := h.b.step(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if h.complete == nil {
+		t.Fatal("final idle did not complete")
 	}
 }
 

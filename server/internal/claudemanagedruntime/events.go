@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 type event struct {
@@ -112,20 +113,25 @@ func (b *Bridge) events(ctx context.Context, r *run) error {
 		msg := map[string]any{}
 		switch e.Type {
 		case "agent.message":
+			r.resume()
 			msg["type"] = "text"
 			msg["content"] = e.text()
 			r.Output = e.text()
 		case "agent.tool_use", "agent.mcp_tool_use", "agent.custom_tool_use":
+			r.resume()
 			msg["type"] = "tool_use"
 			msg["call_id"] = e.ID
 			msg["tool"] = e.Name
 			msg["input"] = e.Input
 		case "agent.tool_result", "agent.mcp_tool_result", "agent.custom_tool_result":
+			r.resume()
 			msg["type"] = "tool_result"
 			if e.ToolUseID != "" {
 				msg["call_id"] = e.ToolUseID
 			}
 			msg["output"] = e.text()
+		case "session.status_running", "session.thread_status_running":
+			r.resume()
 		case "session.error":
 			msg["type"] = "error"
 			msg["content"] = e.Error.Message
@@ -133,10 +139,11 @@ func (b *Bridge) events(ctx context.Context, r *run) error {
 				r.Failure = e.Error.Message
 			}
 		case "session.status_idle":
-			r.Phase = "final"
 			if e.StopReason.Type == "end_turn" && r.Failure == "" {
-				r.Outcome = "completed"
+				r.Phase = "idle"
+				r.IdleSince = time.Now()
 			} else {
+				r.Phase = "final"
 				r.Outcome = "failed"
 				if r.Failure == "" {
 					r.Failure = b.profile.DisplayName + " stopped: " + e.StopReason.Type

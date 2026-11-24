@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/multica-ai/multica/server/internal/daemon"
 )
@@ -133,7 +134,7 @@ func setupMulti(t *testing.T, limit int, tasks ...*daemon.Task) *multiHarness {
 	}))
 	t.Cleanup(q.Close)
 	var err error
-	h.b, err = New(Config{MulticaURL: m.URL, MulticaToken: "multica-secret", WorkspaceID: workspaceID, AnthropicURL: q.URL, AnthropicToken: "anthropic-secret", EnvironmentID: "env_1", StateDir: t.TempDir(), MaxConcurrency: limit}, nil)
+	h.b, err = New(Config{MulticaURL: m.URL, MulticaToken: "multica-secret", WorkspaceID: workspaceID, AnthropicURL: q.URL, AnthropicToken: "anthropic-secret", EnvironmentID: "env_1", StateDir: t.TempDir(), MaxConcurrency: limit, IdleGrace: time.Nanosecond}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

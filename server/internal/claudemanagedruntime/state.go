@@ -51,6 +51,9 @@ type run struct {
 	Output             string           `json:"output,omitempty"`
 	Failure            string           `json:"failure,omitempty"`
 	Outcome            string           `json:"outcome,omitempty"`
+	// IdleSince records when an end_turn idle event was received. It is cleared
+	// when the provider resumes the session.
+	IdleSince time.Time `json:"idle_since,omitempty"`
 
 	// CursorAt is the processed_at of the Cursor event; empty when it had none.
 	CursorAt string `json:"cursor_at,omitempty"`
@@ -66,6 +69,13 @@ type run struct {
 
 	UsageBase     sessionUsage `json:"usage_base,omitempty"`
 	UsageReported bool         `json:"usage_reported,omitempty"`
+}
+
+func (r *run) resume() {
+	if r.Phase == "idle" {
+		r.Phase = "running"
+	}
+	r.IdleSince = time.Time{}
 }
 
 func save(path string, j *journal) error {
@@ -129,7 +139,7 @@ func decodeJournal(b []byte, binding string) (*journal, error) {
 		seen[r.TaskID] = true
 		switch r.Phase {
 		case "prepared", "creating", "final":
-		case "created", "sending", "running":
+		case "created", "sending", "running", "idle":
 			if r.SessionID == "" {
 				return nil, fmt.Errorf("bridge journal has no session ID")
 			}
