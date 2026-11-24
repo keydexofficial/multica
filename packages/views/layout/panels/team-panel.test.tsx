@@ -318,19 +318,20 @@ describe("TeamPanel runtime badge", () => {
     });
   });
 
-  it("does not count Qoder cloud services as machines", () => {
+  it("counts managed cloud runtimes in the online runtime total", () => {
     renderPanel([
       runtime(),
       runtime({
-        id: "rt-qoder-cloud",
-        daemon_id: "qoder-daemon",
-        provider: "qoder_cloud",
+        id: "rt-oma-cloud",
+        daemon_id: "oma-managed-ws-test",
+        provider: "oma_cloud",
         runtime_mode: "cloud",
+        name: "OMA Managed Agents",
       }),
     ]);
 
     const link = screen.getByRole("link", { name: /^Runtimes/ });
-    expect(within(link).getByText("1 online")).toHaveClass("text-success");
+    expect(within(link).getByText("2 online")).toHaveClass("text-success");
   });
 
   it("hides the badge when there are no machines", () => {
