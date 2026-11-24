@@ -207,7 +207,7 @@ export function PanelSection({
     <ChevronDown
       aria-hidden
       className={cn(
-        "size-3.5 shrink-0 transition-[transform,opacity] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none",
+        "size-3.5 shrink-0 transition-[rotate,opacity] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none",
         collapsed
           ? "-rotate-90"
           : "opacity-0 group-hover/section:opacity-100 group-focus-within/section:opacity-100",
@@ -232,7 +232,7 @@ export function PanelSection({
                   aria-controls={collapsed ? undefined : contentId}
                   onClick={() => onCollapsedChange(!collapsed)}
                   className={cn(
-                    "flex size-5 shrink-0 items-center justify-center rounded-md outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring",
+                    "flex size-5 shrink-0 items-center justify-center rounded-md outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring",
                     // An open section leaves the row to its heading; the
                     // heading itself collapses it (the Inbox's open tab).
                     !collapsed && "sr-only focus-visible:not-sr-only",
@@ -251,7 +251,7 @@ export function PanelSection({
                 aria-expanded={!collapsed}
                 aria-controls={collapsed ? undefined : contentId}
                 onClick={() => onCollapsedChange(!collapsed)}
-                className="-mx-1 flex max-w-full items-center gap-0.5 rounded-md px-1 outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+                className="-mx-1 flex max-w-full items-center gap-0.5 rounded-md px-1 outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring"
               >
                 <span className="truncate">{label}</span>
                 {chevron}
@@ -283,7 +283,7 @@ export function PanelList({
 }
 
 export const PANEL_ROW_CLASS =
-  "flex min-h-[var(--nav-item-height,2rem)] w-full items-center gap-2.5 rounded-nav-item px-3 py-[var(--nav-item-padding-y,0.375rem)] text-left text-body transition-colors outline-none focus-visible:outline-2 focus-visible:outline-ring";
+  "flex min-h-[var(--nav-item-height,2rem)] w-full items-center gap-2.5 rounded-nav-item px-3 py-[var(--nav-item-padding-y,0.375rem)] text-left text-body transition-colors outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring";
 
 /** The `nav-item` theme anchor; every row with an active state carries it. */
 export function panelRowAnchor(active: boolean) {
