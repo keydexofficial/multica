@@ -30,7 +30,6 @@ import (
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/projectaccess"
-	"github.com/multica-ai/multica/server/internal/qoderruntime"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	agentpkg "github.com/multica-ai/multica/server/pkg/agent"
@@ -2986,7 +2985,7 @@ func (h *Handler) QuickCreateIssue(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, status, payload)
 		return
 	}
-	if status, payload := h.checkQuickCreateQoderLimits(r.Context(), obsmetrics.RuntimeLookupSourceIssue, agent.RuntimeID, len(req.AttachmentIDs) > 0); status != 0 {
+	if status, payload := h.checkQuickCreateCloudAttachments(r.Context(), obsmetrics.RuntimeLookupSourceIssue, agent.RuntimeID, len(req.AttachmentIDs) > 0); status != 0 {
 		writeJSON(w, status, payload)
 		return
 	}
@@ -3123,19 +3122,19 @@ func (h *Handler) checkQuickCreateDaemonVersion(ctx context.Context, source stri
 	return h.checkQuickCreateDaemonVersionAtLeast(ctx, source, runtimeID, agentpkg.MinQuickCreateCLIVersion)
 }
 
-// checkQuickCreateQoderLimits keeps attachment-backed quick-create blocked:
-// the bridge can run squad leaders, but cannot draft from these attachments.
-func (h *Handler) checkQuickCreateQoderLimits(ctx context.Context, source string, runtimeID pgtype.UUID, attachments bool) (int, map[string]any) {
+// checkQuickCreateCloudAttachments keeps attachment-backed quick-create blocked
+// for cloud bridges that can draft an issue but cannot read attachments.
+func (h *Handler) checkQuickCreateCloudAttachments(ctx context.Context, source string, runtimeID pgtype.UUID, attachments bool) (int, map[string]any) {
 	if !attachments {
 		return 0, nil
 	}
 	rt, err := h.getAgentRuntime(ctx, source, runtimeID)
-	if err != nil || rt.Provider != qoderruntime.Provider {
+	if err != nil || !cloudagent.IsCloud(rt.Provider) {
 		return 0, nil
 	}
 	return http.StatusUnprocessableEntity, map[string]any{
 		"code":   "agent_unavailable",
-		"reason": "Qoder Cloud Agents cannot read attachments; remove them or pick another agent",
+		"reason": cloudAgentServiceName(rt.Provider) + " cannot read attachments; remove them or pick another agent",
 	}
 }
 

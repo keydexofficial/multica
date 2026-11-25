@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+
+	"github.com/multica-ai/multica/server/internal/cloudagent"
 )
 
 func (b *Bridge) prepare(ctx context.Context, t *claimedTask) (*run, error) {
@@ -16,11 +18,18 @@ func (b *Bridge) prepare(ctx context.Context, t *claimedTask) (*run, error) {
 		return nil, fmt.Errorf("claim identity does not match bridge")
 	}
 	chat := t.ChatSessionID != ""
-	if (t.IssueID != "") == chat || t.IsLeaderTask {
-		return nil, fmt.Errorf("%s bridge supports issue and chat runs only", b.profile.DisplayName)
+	quickCreate := !chat && t.IssueID == "" && t.QuickCreatePrompt != ""
+	if (t.IssueID != "") == (chat || quickCreate) || (t.IsLeaderTask && t.IssueID == "") {
+		return nil, fmt.Errorf("%s bridge supports issue, quick-create and chat runs only", b.profile.DisplayName)
 	}
 	if chat && !b.profile.Chat {
 		return nil, fmt.Errorf("chat runs are not supported by the %s bridge", b.profile.DisplayName)
+	}
+	if quickCreate && !b.profile.QuickCreate {
+		return nil, fmt.Errorf("%s supports existing issue runs only; create the issue manually and assign it to this agent", b.profile.DisplayName)
+	}
+	if t.IsLeaderTask && !b.profile.Leader {
+		return nil, fmt.Errorf("%s does not support squad leader runs", b.profile.DisplayName)
 	}
 	if !strings.HasPrefix(t.AuthToken, "mat_") {
 		return nil, fmt.Errorf("claim is missing a task-scoped credential")
@@ -41,6 +50,12 @@ func (b *Bridge) prepare(ctx context.Context, t *claimedTask) (*run, error) {
 	r.AgentID = binding.AgentID
 	taskAPI := *b.multica
 	taskAPI.token = t.AuthToken
+	if quickCreate {
+		if len(t.QuickCreateAttachmentIDs) > 0 {
+			return nil, fmt.Errorf("attachments are not supported by %s quick-create; create the issue without them", b.profile.DisplayName)
+		}
+		return prepareQuickCreate(t, r), nil
+	}
 	var p strings.Builder
 	var issueTitle string
 	if chat {
@@ -53,31 +68,45 @@ func (b *Bridge) prepare(ctx context.Context, t *claimedTask) (*run, error) {
 			p.WriteString("This continues an earlier conversation. If it is not in your context, answer from the message below.\n")
 		}
 		fmt.Fprintf(&p, "\nRun: %s\n\nUser message:\n%s\n", t.ID, t.ChatMessage)
+		// Chat files may join a continued session; each turn mounts under its
+		// own run so same-named files from earlier turns stay intact.
+		r.MountFiles = len(t.ChatAttachments) > 0
 		if err := b.attachChatFiles(ctx, &taskAPI, t, r, &p); err != nil {
 			return nil, err
 		}
 	} else {
 		var issue struct {
-			Title       string            `json:"title"`
-			Description string            `json:"description"`
-			Attachments []json.RawMessage `json:"attachments"`
+			Title       string               `json:"title"`
+			Description string               `json:"description"`
+			Attachments []chatAttachmentMeta `json:"attachments"`
 		}
 		if err := taskAPI.call(ctx, http.MethodGet, "/api/issues/"+url.PathEscape(t.IssueID), nil, &issue); err != nil {
 			return nil, fmt.Errorf("read issue: %w", err)
 		}
-		if len(issue.Attachments) > 0 {
+		if len(issue.Attachments) > 0 && !b.profile.IssueAttachments {
 			return nil, fmt.Errorf("issue attachments are not supported by the %s bridge", b.profile.DisplayName)
 		}
 		issueTitle = issue.Title
-		fmt.Fprintf(&p, "Complete the following Multica issue in your %s environment. Return a final summary including code changes, tests and branch/PR/MR links when available. This bridge does not expose a local Multica daemon.\n", b.profile.DisplayName)
+		if t.IsLeaderTask {
+			r.Leader = &squadLeader{IssueID: t.IssueID, TriggerCommentID: t.TriggerCommentID, token: t.AuthToken}
+			fmt.Fprintf(&p, "You lead a Multica squad on the following issue. Follow the Squad Operating Protocol in your agent instructions: coordinate, do not do the work yourself. This bridge does not expose a local Multica daemon.\n")
+		} else {
+			fmt.Fprintf(&p, "Complete the following Multica issue in your %s environment. Return a final summary including code changes, tests and branch/PR/MR links when available. This bridge does not expose a local Multica daemon.\n", b.profile.DisplayName)
+		}
 		if t.PriorSessionID != "" {
 			r.PriorSessionID = t.PriorSessionID
 			p.WriteString("This is a follow-up on the same issue. If the earlier conversation is not in your context, rely on the issue and comments below.\n")
 		}
 		fmt.Fprintf(&p, "\nRun: %s\nIssue: %s\n\n%s\n\n%s\n", t.ID, t.IssueIdentifier, issue.Title, issue.Description)
+		if err := b.attachIssueFiles(ctx, &taskAPI, t, issue.Attachments, r, &p); err != nil {
+			return nil, err
+		}
 	}
 	if t.Agent != nil {
 		fmt.Fprintf(&p, "\nAgent instructions:\n%s\n", t.Agent.Instructions)
+	}
+	if r.Leader != nil {
+		p.WriteString(leaderBridgeNote(b.profile.DisplayName))
 	}
 	fmt.Fprintf(&p, "\nWorkspace context:\n%s\n\nProject:\n%s\n%s\n", t.WorkspaceContext, t.ProjectTitle, t.ProjectDescription)
 	if t.HandoffNote != "" {
@@ -100,7 +129,7 @@ func (b *Bridge) prepare(ctx context.Context, t *claimedTask) (*run, error) {
 		if err := json.Unmarshal(res.ResourceRef, &ref); err != nil {
 			return nil, fmt.Errorf("invalid repository resource")
 		}
-		resource, err := repositoryResourceFor(ref, b.profile.DisplayName)
+		resource, err := repositoryResourceFor(ref, b.profile)
 		if err != nil {
 			return nil, err
 		}
@@ -112,15 +141,15 @@ func (b *Bridge) prepare(ctx context.Context, t *claimedTask) (*run, error) {
 	// Project repositories win; otherwise use the agent's default repository,
 	// and finally the workspace's only repository when it has a credential.
 	if len(r.Resources) == 0 && binding.Repository != nil && binding.Repository.URL != "" {
-		resource, err := repositoryResourceFor(*binding.Repository, b.profile.DisplayName)
+		resource, err := repositoryResourceFor(*binding.Repository, b.profile)
 		if err != nil {
 			return nil, err
 		}
 		r.Resources = append(r.Resources, resource)
 	}
 	if len(r.Resources) == 0 && len(t.Repos) == 1 {
-		if resource, err := repositoryResourceFor(Repository{URL: t.Repos[0].URL}, b.profile.DisplayName); err == nil {
-			if _, err := b.sessionResources([]map[string]any{resource}); err == nil {
+		if resource, err := repositoryResourceFor(Repository{URL: t.Repos[0].URL}, b.profile); err == nil {
+			if _, _, _, err := b.sessionResources(ctx, []map[string]any{resource}); err == nil {
 				r.Resources = append(r.Resources, resource)
 			}
 		}
@@ -134,7 +163,7 @@ func (b *Bridge) prepare(ctx context.Context, t *claimedTask) (*run, error) {
 	if !chat {
 		if len(r.Resources) == 0 {
 			p.WriteString("\nNo repository is mounted for this run. Do not create branches, commits or pull requests in any repository, including repositories your tools can reach; describe the change you would make in your final summary instead.\n")
-		} else if t.IssueIdentifier != "" {
+		} else if t.IssueIdentifier != "" && !t.IsLeaderTask {
 			fmt.Fprintf(&p, "\nChange only the mounted repository %s. When you change code, push a new branch named %s (never the default branch), open a pull request in that repository whose title starts with \"%s: \", and put the pull request link in your final summary. Multica links the pull request to this issue through that identifier.\n", r.Resources[0]["url"], BranchName(t.IssueIdentifier, issueTitle), t.IssueIdentifier)
 		}
 	}
@@ -173,25 +202,25 @@ func ParseAgentConfig(raw json.RawMessage) (AgentConfig, error) {
 
 func ParseAgentConfigForProfile(raw json.RawMessage, profile Profile) (AgentConfig, error) {
 	profile = normalizeProfile(profile)
-	return parseAgentConfig(raw, profile.AgentBindingKey, profile.AgentBindingError, profile.DisplayName)
+	return parseAgentConfig(raw, profile)
 }
 
-func parseAgentConfig(raw json.RawMessage, bindingKey, bindingError, displayName string) (AgentConfig, error) {
+func parseAgentConfig(raw json.RawMessage, profile Profile) (AgentConfig, error) {
 	var payload map[string]json.RawMessage
 	var cfg AgentConfig
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return cfg, fmt.Errorf("%s", bindingError)
+		return cfg, fmt.Errorf("%s", profile.AgentBindingError)
 	}
-	if err := json.Unmarshal(payload[bindingKey], &cfg.AgentID); err != nil || !ValidAgentID(cfg.AgentID) {
-		return cfg, fmt.Errorf("%s", bindingError)
+	if err := json.Unmarshal(payload[profile.AgentBindingKey], &cfg.AgentID); err != nil || !ValidAgentID(cfg.AgentID) {
+		return cfg, fmt.Errorf("%s", profile.AgentBindingError)
 	}
 	if repository := payload["repository"]; len(repository) > 0 && string(repository) != "null" {
 		if err := json.Unmarshal(repository, &cfg.Repository); err != nil {
-			return cfg, fmt.Errorf("%s", bindingError)
+			return cfg, fmt.Errorf("%s", profile.AgentBindingError)
 		}
 	}
 	if cfg.Repository != nil && cfg.Repository.URL != "" {
-		if _, err := repositoryResourceFor(*cfg.Repository, displayName); err != nil {
+		if _, err := repositoryResourceFor(*cfg.Repository, profile); err != nil {
 			return cfg, fmt.Errorf("default repository: %w", err)
 		}
 	}
@@ -201,10 +230,10 @@ func parseAgentConfig(raw json.RawMessage, bindingKey, bindingError, displayName
 var commitRef = regexp.MustCompile(`^[a-fA-F0-9]{40}([a-fA-F0-9]{24})?$`)
 
 func repositoryResource(ref Repository) (map[string]any, error) {
-	return repositoryResourceFor(ref, ClaudeProfile().DisplayName)
+	return repositoryResourceFor(ref, ClaudeProfile())
 }
 
-func repositoryResourceFor(ref Repository, displayName string) (map[string]any, error) {
+func repositoryResourceFor(ref Repository, profile Profile) (map[string]any, error) {
 	u, err := url.Parse(ref.URL)
 	if err != nil || u.Scheme != "https" || u.Hostname() != "github.com" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return nil, fmt.Errorf("repositories must use an HTTPS github.com URL without credentials")
@@ -212,11 +241,15 @@ func repositoryResourceFor(ref Repository, displayName string) (map[string]any, 
 	if _, err := repositoryKey(ref.URL); err != nil {
 		return nil, err
 	}
-	// The managed runtime accepts only https://github.com/<owner>/<repo>, without a .git suffix.
+	// Claude accepts https://github.com/<owner>/<repo> without a .git suffix;
+	// OMA's repository contract requires the clone URL to end in .git.
 	path := strings.TrimSuffix(strings.TrimSuffix(u.Path, "/"), ".git")
+	if profile.Provider == cloudagent.OMAProvider {
+		path += ".git"
+	}
 	resource := map[string]any{"type": "github_repository", "url": "https://github.com" + path}
 	if strings.HasPrefix(ref.Ref, "refs/tags/") || commitRef.MatchString(ref.Ref) {
-		return nil, fmt.Errorf("%s supports branch refs only", displayName)
+		return nil, fmt.Errorf("%s supports branch refs only", profile.DisplayName)
 	}
 	if name := strings.TrimPrefix(ref.Ref, "refs/heads/"); name != "" {
 		resource["checkout"] = map[string]string{"type": "branch", "name": name}

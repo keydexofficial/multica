@@ -14,7 +14,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
+	"github.com/multica-ai/multica/server/internal/cloudagent"
 	"github.com/multica-ai/multica/server/internal/daemon"
 )
 
@@ -69,6 +71,17 @@ type harness struct {
 	sessionResources []map[string]any
 	fileContent      map[string]string
 	fileScope        string
+
+	// Issue attachments returned by the issue endpoint.
+	issueAttachments []map[string]any
+	// Custom tool results and resource credential updates sent to the provider.
+	customToolResults []map[string]any
+	resourceUpdates   []map[string]any
+	// Quick-create and squad-leader writes to Multica.
+	createdIssues      []map[string]any
+	issueComments      []map[string]any
+	squadEvaluations   []map[string]any
+	createdIssueStatus int
 }
 
 func setup(t *testing.T) *harness {
@@ -91,7 +104,7 @@ func setupWith(t *testing.T, profile Profile, runtimeConfigKey string) *harness 
 				t.Error("missing workspace")
 			}
 			auth := "Bearer multica-secret"
-			if strings.HasPrefix(r.URL.Path, "/api/issues/") ||
+			if r.URL.Path == "/api/issues" || strings.HasPrefix(r.URL.Path, "/api/issues/") ||
 				strings.HasPrefix(r.URL.Path, "/api/attachments/") ||
 				strings.HasSuffix(r.URL.Path, "/upload-file") {
 				auth = "Bearer mat_task"
@@ -107,8 +120,32 @@ func setupWith(t *testing.T, profile Profile, runtimeConfigKey string) *harness 
 		case strings.HasSuffix(r.URL.Path, "/tasks/claim"):
 			json.NewEncoder(w).Encode(map[string]any{"task": h.task})
 			h.task = nil
+		case r.URL.Path == "/api/issues" && r.Method == http.MethodPost:
+			var body map[string]any
+			json.NewDecoder(r.Body).Decode(&body)
+			h.createdIssues = append(h.createdIssues, body)
+			status := h.createdIssueStatus
+			if status == 0 {
+				status = http.StatusCreated
+			}
+			if status >= 400 {
+				w.WriteHeader(status)
+				io.WriteString(w, `{"code":"active_duplicate_issue","error":"duplicate"}`)
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]any{"identifier": "MUL-42"})
+		case strings.HasSuffix(r.URL.Path, "/comments"):
+			var body map[string]any
+			json.NewDecoder(r.Body).Decode(&body)
+			h.issueComments = append(h.issueComments, body)
+			json.NewEncoder(w).Encode(map[string]any{"trigger_outcomes": []map[string]any{}})
+		case strings.HasSuffix(r.URL.Path, "/squad-evaluated"):
+			var body map[string]any
+			json.NewDecoder(r.Body).Decode(&body)
+			h.squadEvaluations = append(h.squadEvaluations, body)
+			io.WriteString(w, `{}`)
 		case strings.HasPrefix(r.URL.Path, "/api/issues/"):
-			io.WriteString(w, `{"title":"Fix bug","description":"Use repository context"}`)
+			json.NewEncoder(w).Encode(map[string]any{"title": "Fix bug", "description": "Use repository context", "attachments": h.issueAttachments})
 		case strings.HasPrefix(r.URL.Path, "/api/attachments/"):
 			id := strings.TrimPrefix(r.URL.Path, "/api/attachments/")
 			filename, contentType := "notes.txt", "text/plain"
@@ -274,6 +311,15 @@ func setupWith(t *testing.T, profile Profile, runtimeConfigKey string) *harness 
 				json.NewEncoder(w).Encode(fixture(t, "events_interrupt.json"))
 				return
 			}
+			if len(req.Events) == 1 && req.Events[0].Type == "user.custom_tool_result" {
+				var raw struct {
+					Events []map[string]any `json:"events"`
+				}
+				json.Unmarshal(body, &raw)
+				h.customToolResults = append(h.customToolResults, raw.Events...)
+				json.NewEncoder(w).Encode(map[string]any{})
+				return
+			}
 			h.sends++
 			h.remoteStatus = "running"
 			h.prompt = req.Events[0].text()
@@ -327,6 +373,14 @@ func setupWith(t *testing.T, profile Profile, runtimeConfigKey string) *harness 
 				t.Error("provider resource list without beta")
 			}
 			json.NewEncoder(w).Encode(map[string]any{"data": h.sessionResources})
+		case strings.HasPrefix(r.URL.Path, "/sessions/sess_1/resources/") && r.Method == "POST":
+			if r.URL.Query().Get("beta") != "true" {
+				t.Error("provider resource update without beta")
+			}
+			var update map[string]any
+			json.NewDecoder(r.Body).Decode(&update)
+			h.resourceUpdates = append(h.resourceUpdates, update)
+			json.NewEncoder(w).Encode(map[string]any{})
 		case strings.HasPrefix(r.URL.Path, "/files/") && strings.HasSuffix(r.URL.Path, "/content"):
 			if r.URL.Query().Get("beta") != "true" {
 				t.Error("provider file download without beta")
@@ -528,7 +582,7 @@ func TestOMAChatNewSessionAttachments(t *testing.T) {
 	if source["type"] != "file" || source["file_id"] != "file_1" {
 		t.Fatalf("image source = %#v", source)
 	}
-	if len(h.initialResources) != 1 || h.initialResources[0]["mount_path"] != "/mnt/session/uploads/task-1/notes.txt" {
+	if len(h.initialResources) != 1 || h.initialResources[0]["mount_path"] != "/uploads/task-1/notes.txt" {
 		t.Fatalf("session resources = %#v", h.initialResources)
 	}
 	if h.creates != 1 {
@@ -554,7 +608,7 @@ func TestOMAChatFollowUpMountsAttachments(t *testing.T) {
 	if h.creates != 0 || h.sends != 1 {
 		t.Fatalf("creates=%d sends=%d, want the prior session continued", h.creates, h.sends)
 	}
-	if len(h.mountedFiles) != 1 || h.mountedFiles[0]["mount_path"] != "/mnt/session/uploads/task-1/notes.txt" {
+	if len(h.mountedFiles) != 1 || h.mountedFiles[0]["mount_path"] != "/uploads/task-1/notes.txt" {
 		t.Fatalf("mounted files = %#v", h.mountedFiles)
 	}
 	if len(h.sendContent) != 2 || h.sendContent[1]["type"] != "image" {
@@ -1576,5 +1630,301 @@ func TestCancelledTaskKeepsUnresolvedCreateUntilLookupRecovers(t *testing.T) {
 	h.b.cleanup(context.Background())
 	if h.cancels != 1 || len(h.b.state.Unresolved) != 0 || len(h.b.state.Cleanup) != 0 {
 		t.Fatalf("session from the lost create not stopped: cancels=%d unresolved=%+v cleanup=%v", h.cancels, h.b.state.Unresolved, h.b.state.Cleanup)
+	}
+}
+
+func TestOMAIssueAttachments(t *testing.T) {
+	h := setupOMA(t)
+	base := h.b.multica.base
+	h.issueAttachments = []map[string]any{
+		{"id": "img-1", "filename": "shot.png", "content_type": "image/png", "size_bytes": 5, "download_url": base + "/download/img-1"},
+		{"id": "doc-1", "filename": "notes.txt", "content_type": "text/plain", "size_bytes": 5, "download_url": base + "/download/doc-1"},
+	}
+	if err := h.b.step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if h.creates != 1 || len(h.uploadedFiles) != 2 {
+		t.Fatalf("issue attachments not uploaded: creates=%d uploads=%v", h.creates, h.uploadedFiles)
+	}
+	if len(h.initialResources) != 1 {
+		t.Fatalf("resources = %#v", h.initialResources)
+	}
+	var mounted bool
+	for _, resource := range h.initialResources {
+		if resource["type"] == "file" && resource["mount_path"] == "/uploads/task-1/notes.txt" {
+			mounted = true
+		}
+	}
+	if !mounted {
+		t.Fatalf("issue file not mounted: %#v", h.initialResources)
+	}
+	var image bool
+	for _, block := range h.initialContent {
+		if block["type"] == "image" {
+			image = true
+		}
+	}
+	if !image {
+		t.Fatalf("issue image missing from message: %#v", h.initialContent)
+	}
+	if !strings.Contains(h.prompt, "Issue attachments:") ||
+		!strings.Contains(h.prompt, "/mnt/session/uploads/task-1/notes.txt (mounted file)") ||
+		!strings.Contains(h.prompt, "shot.png (image attached to this message)") {
+		t.Fatalf("attachment prompt missing:\n%s", h.prompt)
+	}
+}
+
+func TestClaudeRejectsIssueAttachments(t *testing.T) {
+	h := setup(t)
+	h.issueAttachments = []map[string]any{{"id": "doc-1", "filename": "notes.txt", "content_type": "text/plain", "size_bytes": 5}}
+	if err := h.b.step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if h.failure == nil || !strings.Contains(fmt.Sprint(h.failure["error"]), "issue attachments are not supported") {
+		t.Fatalf("failure = %#v", h.failure)
+	}
+}
+
+func TestOMACustomToolResult(t *testing.T) {
+	h := setupOMA(t)
+	if err := h.b.step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	h.remoteStatus = "running"
+	h.events = append(h.events,
+		map[string]any{"id": "evt_tool", "type": "agent.custom_tool_use", "name": "Lookup", "input": map[string]any{}},
+		map[string]any{"id": "evt_pause", "type": "session.status_idle", "stop_reason": map[string]any{"type": "requires_action", "event_ids": []string{"evt_tool"}}},
+	)
+	if err := h.b.step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.customToolResults) != 1 {
+		t.Fatalf("custom tool result = %#v", h.customToolResults)
+	}
+	result := h.customToolResults[0]
+	if result["type"] != "user.custom_tool_result" || result["custom_tool_use_id"] != "evt_tool" || result["is_error"] != true {
+		t.Fatalf("result = %#v", result)
+	}
+	if h.complete != nil || h.failure != nil {
+		t.Fatalf("run finalized while paused: complete=%v failure=%v", h.complete, h.failure)
+	}
+	if r := h.b.state.first(); r == nil || r.Phase != "running" || !r.CustomToolAnswered["evt_tool"] {
+		t.Fatalf("run state = %#v", r)
+	}
+	h.finish("end_turn")
+	if err := h.b.step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if h.complete == nil {
+		t.Fatal("run did not complete after the custom tool was answered")
+	}
+}
+
+func TestOMACustomToolRequiresActionFailsForConfirmations(t *testing.T) {
+	h := setupOMA(t)
+	if err := h.b.step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	h.remoteStatus = "running"
+	h.events = append(h.events,
+		map[string]any{"id": "evt_confirm", "type": "agent.tool_use", "name": "bash", "input": map[string]any{}},
+		map[string]any{"id": "evt_pause", "type": "session.status_idle", "stop_reason": map[string]any{"type": "requires_action", "event_ids": []string{"evt_confirm"}}},
+	)
+	if err := h.b.step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if h.failure == nil || !strings.Contains(fmt.Sprint(h.failure["error"]), "requires_action") {
+		t.Fatalf("failure = %#v", h.failure)
+	}
+}
+
+func TestOMAGitHubAppCredentialFallbackAndRefresh(t *testing.T) {
+	h := setupOMA(t)
+	calls := 0
+	h.b.cfg.GitHubAppToken = func(context.Context, string, string) (string, int64, error) {
+		calls++
+		if calls == 1 {
+			return "ghs_first", 77, nil
+		}
+		return "ghs_second", 77, nil
+	}
+	h.task.Agent.RuntimeConfig = json.RawMessage(`{"oma_agent_id":"agent_1","repository":{"url":"https://github.com/acme/app","ref":"refs/heads/main"}}`)
+	if err := h.b.step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.initialResources) != 1 || h.initialResources[0]["authorization_token"] != "ghs_first" {
+		t.Fatalf("resources = %#v", h.initialResources)
+	}
+	if r := h.b.state.first(); r == nil || r.CredentialIssuedAt.IsZero() {
+		t.Fatalf("credential timestamp not recorded: %#v", r)
+	}
+	h.sessionResources = []map[string]any{{"id": "res_1", "type": "github_repository", "url": "https://github.com/acme/app"}}
+	h.b.state.first().CredentialIssuedAt = time.Now().Add(-credentialRefreshInterval - time.Minute)
+	h.remoteStatus = "running"
+	if err := h.b.step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.resourceUpdates) != 1 || h.resourceUpdates[0]["authorization_token"] != "ghs_second" {
+		t.Fatalf("refresh = %#v", h.resourceUpdates)
+	}
+}
+
+func TestOMAGitHubAppNotCoveredReportsMissingCredential(t *testing.T) {
+	h := setupOMA(t)
+	h.b.cfg.GitHubAppToken = func(context.Context, string, string) (string, int64, error) {
+		return "", 0, cloudagent.ErrGitHubAppNotCovered
+	}
+	h.task.Agent.RuntimeConfig = json.RawMessage(`{"oma_agent_id":"agent_1","repository":{"url":"https://github.com/acme/app"}}`)
+	if err := h.b.step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if h.failure == nil || !strings.Contains(fmt.Sprint(h.failure["error"]), "no GitHub credential configured") {
+		t.Fatalf("failure = %#v", h.failure)
+	}
+}
+
+func TestOMASquadLeaderDeliversCommentAndEvaluation(t *testing.T) {
+	h := setupOMA(t)
+	h.task.IsLeaderTask = true
+	h.task.TriggerCommentID = "comment-1"
+	if err := h.b.step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(h.prompt, "Squad leader on OMA Managed Agents") ||
+		!strings.Contains(h.prompt, "OUTCOME: action | no_action | failed") ||
+		strings.Contains(h.prompt, "push a new branch") {
+		t.Fatalf("leader prompt:\n%s", h.prompt)
+	}
+	h.remoteStatus = "running"
+	h.events = append(h.events,
+		map[string]any{"id": "evt_reply", "type": "agent.message", "content": []map[string]string{{"type": "text", "text": "OUTCOME: action\nREASON: delegate\nPlease pick this up."}}},
+		map[string]any{"id": "evt_idle", "type": "session.status_idle", "stop_reason": map[string]any{"type": "end_turn"}},
+	)
+	if err := h.b.step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.issueComments) != 1 || h.issueComments[0]["content"] != "Please pick this up." || h.issueComments[0]["parent_id"] != "comment-1" {
+		t.Fatalf("comments = %#v", h.issueComments)
+	}
+	if len(h.squadEvaluations) != 1 || h.squadEvaluations[0]["outcome"] != "action" || h.squadEvaluations[0]["reason"] != "delegate" {
+		t.Fatalf("evaluations = %#v", h.squadEvaluations)
+	}
+	if h.complete == nil {
+		t.Fatal("leader run did not complete")
+	}
+}
+
+func TestClaudeRejectsSquadLeader(t *testing.T) {
+	h := setup(t)
+	h.task.IsLeaderTask = true
+	if err := h.b.step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if h.failure == nil || !strings.Contains(fmt.Sprint(h.failure["error"]), "squad leader runs") {
+		t.Fatalf("failure = %#v", h.failure)
+	}
+}
+
+func TestOMAQuickCreateDraftsAndCreatesIssue(t *testing.T) {
+	h := setupOMA(t)
+	h.task.IssueID = ""
+	h.task.QuickCreatePrompt = "the login button is broken"
+	h.task.QuickCreatePriority = "high"
+	h.task.SquadID = "squad-1"
+	h.task.Agent.ID = "agent-uuid"
+	if err := h.b.step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(h.prompt, "Draft the issue") || !strings.Contains(h.prompt, "the login button is broken") {
+		t.Fatalf("quick-create prompt:\n%s", h.prompt)
+	}
+	if h.creates != 1 || h.sends != 0 {
+		t.Fatalf("creates=%d sends=%d", h.creates, h.sends)
+	}
+	h.remoteStatus = "running"
+	h.events = append(h.events,
+		map[string]any{"id": "evt_reply", "type": "agent.message", "content": []map[string]string{{"type": "text", "text": `{"title":"Fix login","description":"The login button is broken.","priority":"low"}`}}},
+		map[string]any{"id": "evt_idle", "type": "session.status_idle", "stop_reason": map[string]any{"type": "end_turn"}},
+	)
+	if err := h.b.step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.createdIssues) != 1 {
+		t.Fatalf("created issues = %#v", h.createdIssues)
+	}
+	created := h.createdIssues[0]
+	if created["title"] != "Fix login" || created["priority"] != "high" || created["assignee_type"] != "squad" || created["assignee_id"] != "squad-1" || created["origin_type"] != "quick_create" {
+		t.Fatalf("issue body = %#v", created)
+	}
+	if h.complete == nil || !strings.Contains(fmt.Sprint(h.complete["output"]), "MUL-42") {
+		t.Fatalf("complete = %#v", h.complete)
+	}
+}
+
+func TestClaudeRejectsQuickCreate(t *testing.T) {
+	h := setup(t)
+	h.task.IssueID = ""
+	h.task.QuickCreatePrompt = "file a bug"
+	if err := h.b.step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if h.failure == nil || !strings.Contains(fmt.Sprint(h.failure["error"]), "supports existing issue runs only") {
+		t.Fatalf("failure = %#v", h.failure)
+	}
+}
+
+func TestOMAQuickCreateRejectsAttachments(t *testing.T) {
+	h := setupOMA(t)
+	h.task.IssueID = ""
+	h.task.QuickCreatePrompt = "file a bug"
+	h.task.QuickCreateAttachmentIDs = []string{"att-1"}
+	if err := h.b.step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if h.failure == nil || !strings.Contains(fmt.Sprint(h.failure["error"]), "attachments are not supported") {
+		t.Fatalf("failure = %#v", h.failure)
+	}
+}
+
+func TestRepositoryResourceGitSuffixByProfile(t *testing.T) {
+	oma, err := repositoryResourceFor(Repository{URL: "https://github.com/acme/app", Ref: "refs/heads/main"}, OMAProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if oma["url"] != "https://github.com/acme/app.git" {
+		t.Fatalf("OMA repository URL = %q", oma["url"])
+	}
+	claude, err := repositoryResourceFor(Repository{URL: "https://github.com/acme/app", Ref: "refs/heads/main"}, ClaudeProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claude["url"] != "https://github.com/acme/app" {
+		t.Fatalf("Claude repository URL = %q", claude["url"])
+	}
+	if _, err := repositoryResourceFor(Repository{URL: "https://github.com/acme/app.git"}, OMAProfile()); err != nil {
+		t.Fatalf("already-suffixed OMA repository rejected: %v", err)
+	}
+}
+
+func TestUniqueAttachmentNameTruncatesOnRuneBoundary(t *testing.T) {
+	name := strings.Repeat("é", 150)
+	got := uniqueAttachmentName(name, "fallback", map[string]bool{})
+	if len(got) > 200 || !utf8.ValidString(got) {
+		t.Fatalf("truncated name is invalid: len=%d valid=%v", len(got), utf8.ValidString(got))
+	}
+}
+
+func TestOMAIssueAttachmentsStartFreshSession(t *testing.T) {
+	h := setupOMA(t)
+	h.followUp()
+	h.issueAttachments = []map[string]any{{
+		"id": "doc-1", "filename": "notes.txt", "content_type": "text/plain", "size_bytes": 5,
+		"download_url": h.b.multica.base + "/download/doc-1",
+	}}
+	if err := h.b.step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if h.creates != 1 || h.sends != 0 {
+		t.Fatalf("issue attachments reused the prior session: creates=%d sends=%d", h.creates, h.sends)
 	}
 }

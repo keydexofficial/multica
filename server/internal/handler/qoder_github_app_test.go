@@ -71,9 +71,9 @@ func TestIssueQoderRepositoryTokenSingleRepositoryScope(t *testing.T) {
 		})
 	})
 
-	token, gotInstallation, err := testHandler.issueQoderRepositoryToken(context.Background(), testWorkspaceID, "acme", "app")
+	token, gotInstallation, err := testHandler.issueWorkspaceRepositoryToken(context.Background(), testWorkspaceID, "acme", "app")
 	if err != nil {
-		t.Fatalf("issueQoderRepositoryToken: %v", err)
+		t.Fatalf("issueWorkspaceRepositoryToken: %v", err)
 	}
 	if token != "ghs_one_repo" || gotInstallation != installationID {
 		t.Fatalf("token=%q installation=%d", token, gotInstallation)
@@ -99,10 +99,10 @@ func TestIssueQoderRepositoryTokenNotCovered(t *testing.T) {
 	withQoderGitHubApp(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	})
-	if _, _, err := testHandler.issueQoderRepositoryToken(context.Background(), testWorkspaceID, "someone-else", "app"); !errors.Is(err, qoderruntime.ErrGitHubAppNotCovered) {
+	if _, _, err := testHandler.issueWorkspaceRepositoryToken(context.Background(), testWorkspaceID, "someone-else", "app"); !errors.Is(err, qoderruntime.ErrGitHubAppNotCovered) {
 		t.Fatalf("wrong owner: err=%v", err)
 	}
-	if _, _, err := testHandler.issueQoderRepositoryToken(context.Background(), testWorkspaceID, "acme", "not-granted"); !errors.Is(err, qoderruntime.ErrGitHubAppNotCovered) {
+	if _, _, err := testHandler.issueWorkspaceRepositoryToken(context.Background(), testWorkspaceID, "acme", "not-granted"); !errors.Is(err, qoderruntime.ErrGitHubAppNotCovered) {
 		t.Fatalf("revoked repository: err=%v", err)
 	}
 }
@@ -119,12 +119,12 @@ func TestIssueQoderRepositoryTokenPermissionRefusal(t *testing.T) {
 	withQoderGitHubApp(t, func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"message": message})
 	})
-	_, _, err := testHandler.issueQoderRepositoryToken(context.Background(), testWorkspaceID, "acme", "app")
+	_, _, err := testHandler.issueWorkspaceRepositoryToken(context.Background(), testWorkspaceID, "acme", "app")
 	if !errors.Is(err, qoderruntime.ErrGitHubAppNotCovered) {
 		t.Fatalf("repository refusal: err=%v", err)
 	}
 	message = "The permissions requested are not granted to this installation."
-	_, _, err = testHandler.issueQoderRepositoryToken(context.Background(), testWorkspaceID, "acme", "app")
+	_, _, err = testHandler.issueWorkspaceRepositoryToken(context.Background(), testWorkspaceID, "acme", "app")
 	if !errors.Is(err, qoderruntime.ErrGitHubAppPermissions) {
 		t.Fatalf("permission refusal: err=%v", err)
 	}
@@ -145,7 +145,26 @@ func TestIssueQoderRepositoryTokenRejectsWiderScope(t *testing.T) {
 			"repositories": []map[string]any{},
 		})
 	})
-	if token, _, err := testHandler.issueQoderRepositoryToken(context.Background(), testWorkspaceID, "acme", "app"); err == nil || token != "" {
+	if token, _, err := testHandler.issueWorkspaceRepositoryToken(context.Background(), testWorkspaceID, "acme", "app"); err == nil || token != "" {
 		t.Fatalf("wide-scope token accepted: token=%q err=%v", token, err)
+	}
+}
+
+// OMA uses the same workspace GitHub App fallback as Qoder; the spec hook must
+// issue a repository-scoped token rather than silently disabling the fallback.
+func TestOMASpecUsesWorkspaceRepositoryToken(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	installationID := withQoderGitHubApp(t, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusCreated, map[string]any{
+			"token":        "ghs_oma",
+			"repositories": []map[string]any{{"name": "app", "owner": map[string]any{"login": "acme"}}},
+		})
+	})
+	spec := testHandler.omaSpec()
+	token, gotInstallation, err := spec.GitHubAppToken(context.Background(), testWorkspaceID, "acme", "app")
+	if err != nil || token != "ghs_oma" || gotInstallation != installationID {
+		t.Fatalf("OMA token=%q installation=%d err=%v", token, gotInstallation, err)
 	}
 }

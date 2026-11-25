@@ -1,6 +1,6 @@
 # OMA Cloud Runtime 接入规划
 
-- 状态：Phase 1、Phase 2 已实现（2026-11-23）；Phase 3 服务端集成点已随 Phase 2 完成；Phase 4 前端代码已实现，但 `apps/docs` 与 OMA 专属品牌图标未完成；Phase 5/6 待联调与文档收尾
+- 状态：Phase 1–4 已实现；issue 附件、squad leader、quick-create、GitHub App 凭证回退与轮换已实现（2026-11-24）；Phase 5/6 待真实 OMA 联调与 `apps/docs` 收尾
 - 代码基线：`own-multica` / `langcli-and-oma`
 - 记录日期：2026-11-23
 - 关联：PR #9761（`claude_managed`，已在 `df7ad6443` 合并进本分支）
@@ -47,15 +47,13 @@
 
 ### 2.2 v1 非目标
 
-- quick-create
-- squad / leader
 - 多仓库、非 github.com 主机
 - commit / tag checkout（仅 branch）
-- 工具审批（桥不回答确认请求）
+- 交互式工具审批（桥不回答确认请求）
 - session budget
 - SSE 实时流（沿用轮询 + journal 恢复）
 
-chat（文本、附件、回传文件）已实现，见本文第 15 节。
+issue 附件、chat（文本、附件、回传文件）、squad leader、quick-create 与 GitHub App 凭证回退/轮换已实现，见本文第 15 节。
 
 ## 3. 总体架构
 
@@ -335,7 +333,7 @@ stateDiagram-v2
 | 校验 environment/vault | `GET /v1/environments/{id}?beta=true`、`GET /v1/vaults/{id}?beta=true` |
 | 仓库资源 | `github_repository` + `url` + `authorization_token` + `checkout: {type: branch, name}` |
 | 上传 chat 附件 / 回传文件 | `POST /v1/files?beta=true`（multipart `file`） |
-| 挂载 chat 附件 | `POST /v1/sessions/{id}/resources?beta=true` + `{type:"file", file_id, mount_path}` |
+| 挂载 issue/chat 附件 | `POST /v1/sessions/{id}/resources?beta=true` + `{type:"file", file_id, mount_path:"/uploads/<task>/<name>"}`；sandbox 可见路径为 `/mnt/session/uploads/<task>/<name>` |
 | 列回传文件 | `GET /v1/sessions/{id}/resources?beta=true&limit=100&page=` |
 | 下载回传文件 | `GET /v1/files/{id}?beta=true`、`GET /v1/files/{id}/content?beta=true` |
 | 用量 | `GET /v1/sessions/{id}` 的 `usage` |
@@ -380,7 +378,7 @@ stateDiagram-v2
 
 实现记录（2026-11-23）：
 
-- `internal/cloudagent` 注册 `oma_cloud`：daemon 前缀 `oma-managed-`、service/connection 名称 `OMA Managed Agents`、lock seed `24`、supervisor lock `8193`、`ManagedDaemonOnly`；chat 能力已启用，quick-create 能力保持关闭。
+- `internal/cloudagent` 注册 `oma_cloud`：daemon 前缀 `oma-managed-`、service/connection 名称 `OMA Managed Agents`、lock seed `24`、supervisor lock `8193`、`ManagedDaemonOnly`；chat 与 quick-create 能力已启用。
 - `claudemanagedruntime.OMAProfile()`：允许 HTTP、`?beta=true`、failure reason `oma_cloud_execution`、standalone 前缀 `oma-bridge-`、`oma_agent_id` 绑定、跳过 workspace key 探测、`UsageSession`。
 - 新增 provider 参数化连接引擎 `internal/handler/cloud_agent_connection.go`，OMA handler `internal/handler/oma_connection.go` 只提供配置编解码、输入校验、bridge 构造和目录/取消适配；settings 字段为 `base_url`、`api_token`、`environment_id` 等，`base_url` 必须包含 OMA `/v1` API 根。
 - 已注册路由：
@@ -405,12 +403,12 @@ stateDiagram-v2
 - `isCloudAgentProvider` / `cloudAgentServiceName` 覆盖 OMA。
 - `middleware/managed_daemon.go` 增加 `oma-managed-`。
 - daemon 注册校验与 `DaemonAuth` 前缀解析。
-- chat 按能力位允许 OMA，quick-create 按能力位拒绝 OMA。
+- chat 与 quick-create 按能力位允许 OMA；Claude 仍为 issue-only。
 - agent 校验 `oma_agent_id`，拒绝 skills/model/custom env/args/mcp 覆盖。
 - issue lifecycle 与 workspace 删除的 provider 列表。
 - failure reason、metrics、task failure 文案。
 
-实现记录（2026-11-23）：以上项均由 `cloudagent` 注册表、capability 位、`cloudAgentConfigValidators` 和 `cloudagent.Providers()` 统一覆盖，没有在 handler 中新增 OMA 专用分支。测试补充：provider 身份/能力位、`oma_agent_id` 配置校验、override 拒绝、`oma-managed-` daemon 前缀，以及 quick-create 的 OMA 拒绝用例；后续 chat 实现补上 OMA chat 放行用例。
+实现记录（2026-11-23）：以上项均由 `cloudagent` 注册表、capability 位、`cloudAgentConfigValidators` 和 `cloudagent.Providers()` 统一覆盖，没有在 handler 中新增 OMA 专用分支。测试补充：provider 身份/能力位、`oma_agent_id` 配置校验、override 拒绝、`oma-managed-` daemon 前缀，以及 quick-create 的 OMA 放行用例；后续 chat/issue 附件/leader/quick-create 实现补齐对应放行用例。
 
 ### Phase 4 — 前端
 
@@ -544,5 +542,13 @@ stateDiagram-v2
   - 完成时列出 `GET /v1/sessions/{id}/resources`，只取 outputs 前缀下且不在本轮基线中的文件。
   - 下载前校验文件 `scope.id` 等于本 run 的 session；单个文件 ≤10 MB。
   - 下载后通过 `POST /api/upload-file`（task token + `task_id`）附到回复；失败或超限写入本地化 delivery notice。
-- 未实现：`DeliverArtifacts` 自定义工具、chat 的 squad leader、quick-create。
+- 未实现：chat 的 squad leader、`DeliverArtifacts` 自定义工具（OMA 用 outputs 扫描，不需要该工具）。
 - 测试：`TestOMAChatRun`、`TestChatFollowUpSkipsEarlierIdenticalMessage`、`TestOMAChatNewSessionAttachments`、`TestOMAChatFollowUpMountsAttachments`、`TestOMAChatDeliversOutputFiles`、`TestOMAChatDeliversOnlyNewOutputFiles`、`TestOMAChatRefusesUnscopedOutputFile`、`TestClaudeProfileRejectsChat`。
+
+## 16. Issue 附件、Squad leader、Quick-create 与 GitHub App 凭证
+
+- issue 附件：复用 chat 的上传/挂载逻辑；图片进入 `user.message` 的 image block，其他文件以公开 `mount_path` `/uploads/<task>/<name>` 挂载（sandbox 可见路径 `/mnt/session/uploads/<task>/<name>`）；带文件附件的 issue run 不续用旧 session（仅图片时仍可续用）。测试：`TestOMAIssueAttachments`、`TestOMAIssueAttachmentsStartFreshSession`。
+- squad leader：移植 Qoder 的 `OUTCOME / REASON / 评论正文` 契约；bridge 用 task credential 发 comment 并记录 `squad-evaluated`。测试：`TestOMASquadLeaderDeliversCommentAndEvaluation`。
+- quick-create：claim 接受 `quick_create_*` 字段；agent 只输出 issue JSON，bridge 调 `POST /api/issues` 创建；支持 squad 作为 assignee、project、parent issue；附件仍拒绝。测试：`TestOMAQuickCreateDraftsAndCreatesIssue`。
+- GitHub App 凭证：手工 token 缺失时回退到工作区 GitHub App 的 1 小时单仓库 installation token；fingerprint 使用 `github_app:<installation>`；约 45 分钟后通过 `POST /v1/sessions/{id}/resources/{resource_id}` 推送新 token。测试：`TestOMAGitHubAppCredentialFallbackAndRefresh`。
+- custom tool：OMA agent 调用 custom tool 时，bridge 回传 `user.custom_tool_result`（`is_error: true`），避免会话卡在 `requires_action`；工具确认仍按失败处理。测试：`TestOMACustomToolResult`、`TestOMACustomToolRequiresActionFailsForConfirmations`。

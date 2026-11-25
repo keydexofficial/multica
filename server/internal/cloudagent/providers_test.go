@@ -42,7 +42,7 @@ func TestCapabilities(t *testing.T) {
 	if SupportsChat(ClaudeProvider) || SupportsQuickCreate(ClaudeProvider) {
 		t.Fatal("claude capabilities overstated")
 	}
-	if !SupportsChat(OMAProvider) || SupportsQuickCreate(OMAProvider) {
+	if !SupportsChat(OMAProvider) || !SupportsQuickCreate(OMAProvider) {
 		t.Fatal("oma capabilities incorrect")
 	}
 	if SupportsChat("local") || SupportsQuickCreate("local") {

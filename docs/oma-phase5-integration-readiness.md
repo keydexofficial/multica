@@ -93,6 +93,10 @@ Phase 5 的“仓库挂载 + branch push / 开 PR”还需要：
   - 属于 Phase 6，不阻塞 Phase 5。
 - 工具确认仍按失败处理
   - OMA agent 必须配置为 `always_allow`，否则 `requires_action` 会导致任务失败；需要在真实 OMA 上确认配置生效。
+- custom tool 目前只回传“bridge 不执行”的错误结果
+  - 需要确认真实 OMA 的 `user.custom_tool_result` 能被接受，且 agent 能继续完成回合。
+- GitHub App 凭证轮换依赖 `POST /v1/sessions/{id}/resources/{resource_id}`
+  - 需要验证真实 OMA 是否接受运行中 session 的 `authorization_token` 更新。
 
 ## 6. 最小可联调集合
 
@@ -107,12 +111,12 @@ Phase 5 的“仓库挂载 + branch push / 开 PR”还需要：
 7. 绑定 `oma_agent_id` 的 Multica agent。
 8. 测试 issue。
 
-完整 Phase 5 还需要取消、follow-up、usage、pause/resume/disconnect、workspace 删除、PR/vault 等场景资源。
+完整 Phase 5 还需要取消、follow-up、usage、pause/resume/disconnect、workspace 删除、PR/vault、issue 附件、squad leader、quick-create 与 GitHub App 凭证回退等场景资源。
 
 ## 7. 明确不需要 / 不属于 Phase 5
 
 - 创建 OMA 侧 agent 或 environment。
-- OMA quick-create、local directory。
+- local directory。
 - session budgets、交互式 tool approval、SSE。
 - `apps/docs` OMA 页面与品牌图标（Phase 6）。
 - standalone `oma-runtime`（除非要单独验证协议）。

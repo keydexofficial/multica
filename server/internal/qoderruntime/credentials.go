@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"os"
 	"strings"
+
+	"github.com/multica-ai/multica/server/internal/cloudagent"
 )
 
 // repositoryKey binds each credential to an exact GitHub repository.
@@ -27,13 +29,13 @@ func repositoryKey(raw string) (string, error) {
 // ErrGitHubAppNotCovered reports that the workspace's GitHub App integration
 // cannot authorize a repository; callers fall back to other credentials or
 // reject the run.
-var ErrGitHubAppNotCovered = errors.New("GitHub App installation does not cover the repository")
+var ErrGitHubAppNotCovered = cloudagent.ErrGitHubAppNotCovered
 
 // ErrGitHubAppPermissions reports that the workspace's GitHub App is
 // installed without the repository write permissions automatic authorization
 // needs. Unlike ErrGitHubAppNotCovered this is operator-actionable: approve
 // the added permissions on GitHub or fall back to a manual repository token.
-var ErrGitHubAppPermissions = errors.New("workspace GitHub App has not granted repository write permissions; approve Contents and Pull requests write access on GitHub, or add a manual repository token")
+var ErrGitHubAppPermissions = cloudagent.ErrGitHubAppPermissions
 
 // sessionResources creates an ephemeral request copy; never put secrets in the
 // journal. A repository resolves its credential in priority order: an explicit

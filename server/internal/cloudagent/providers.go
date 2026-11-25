@@ -59,7 +59,7 @@ var descriptors = []Descriptor{
 		LockSeed:          24,
 		SupervisorLockKey: 8193,
 		ManagedDaemonOnly: true,
-		Capabilities:      Capabilities{Chat: true},
+		Capabilities:      Capabilities{Chat: true, QuickCreate: true},
 	},
 }
 

@@ -26,9 +26,9 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/cloudagent"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	"github.com/multica-ai/multica/server/internal/middleware"
-	"github.com/multica-ai/multica/server/internal/qoderruntime"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -971,26 +971,26 @@ func revokeGitHubInstallationToken(client *http.Client, token string) {
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, githubAPIResponseLimit))
 }
 
-// ── Qoder repository credentials from the workspace GitHub App ─────────────
+// ── Repository credentials from the workspace GitHub App ───────────────────
 
-// issueQoderRepositoryToken mints a short-lived installation token bound to
+// issueWorkspaceRepositoryToken mints a short-lived installation token bound to
 // one repository through a GitHub App installation the workspace connected.
-// It backs the Qoder bridge's credential fallback: repositories covered by
-// the installation need no hand-entered PAT. The caller must supply lowercase
-// owner/repo of the canonical repository URL; a token that comes back scoped
-// to anything else is refused. qoderruntime.ErrGitHubAppNotCovered reports
-// that no bound installation authorizes the repository.
-func (h *Handler) issueQoderRepositoryToken(ctx context.Context, workspaceID, owner, repo string) (string, int64, error) {
+// It backs cloud runtime credential fallback (Qoder and OMA): repositories
+// covered by the installation need no hand-entered PAT. The caller must supply
+// lowercase owner/repo of the canonical repository URL; a token that comes
+// back scoped to anything else is refused. cloudagent.ErrGitHubAppNotCovered
+// reports that no bound installation authorizes the repository.
+func (h *Handler) issueWorkspaceRepositoryToken(ctx context.Context, workspaceID, owner, repo string) (string, int64, error) {
 	ws, err := parseStrictUUID(workspaceID)
 	if err != nil {
-		return "", 0, qoderruntime.ErrGitHubAppNotCovered
+		return "", 0, cloudagent.ErrGitHubAppNotCovered
 	}
 	appJWT, err := signGitHubAppJWT(time.Now())
 	if err != nil {
 		return "", 0, fmt.Errorf("sign GitHub App JWT: %w", err)
 	}
 	if appJWT == "" {
-		return "", 0, qoderruntime.ErrGitHubAppNotCovered
+		return "", 0, cloudagent.ErrGitHubAppNotCovered
 	}
 	installations, err := h.Queries.ListGitHubInstallationsByWorkspace(ctx, ws)
 	if err != nil {
@@ -1008,11 +1008,11 @@ func (h *Handler) issueQoderRepositoryToken(ctx context.Context, workspaceID, ow
 			continue
 		}
 		if errors.Is(err, errGitHubAppPermissionsNotGranted) {
-			return "", 0, qoderruntime.ErrGitHubAppPermissions
+			return "", 0, cloudagent.ErrGitHubAppPermissions
 		}
 		return "", 0, err
 	}
-	return "", 0, qoderruntime.ErrGitHubAppNotCovered
+	return "", 0, cloudagent.ErrGitHubAppNotCovered
 }
 
 // errGitHubRepositoryNotCovered marks a 4xx refusal from the access-token

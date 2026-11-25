@@ -90,6 +90,9 @@ func (h *Handler) omaSpec() cloudAgentSpec {
 		CheckAccess:         checkOMAConnectionAccess,
 		CancelRemoteSession: cancelOMARemoteSession,
 		CancelUnconfirmed:   cancelOMAUnconfirmedSession,
+		GitHubAppToken: func(ctx context.Context, ws, owner, repo string) (string, int64, error) {
+			return h.issueWorkspaceRepositoryToken(ctx, ws, owner, repo)
+		},
 	}
 }
 
@@ -111,6 +114,7 @@ func buildOMABridge(cfg cloudAgentBridgeConfig, hooks cloudAgentHooks) (cloudAge
 		MaxConcurrency: cfg.MaxConcurrency,
 		RunTimeout:     time.Duration(cfg.RunTimeoutMinutes) * time.Minute,
 		GitHubTokens:   cfg.GitHubTokens,
+		GitHubAppToken: cfg.GitHubAppToken,
 	}, claudemanagedruntime.OMAProfile(), nil)
 }
 

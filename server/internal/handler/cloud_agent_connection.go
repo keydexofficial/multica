@@ -45,6 +45,7 @@ type cloudAgentBridgeConfig struct {
 	EnvironmentID     string
 	VaultIDs          []string
 	GitHubTokens      map[string]string
+	GitHubAppToken    func(context.Context, string, string) (string, int64, error)
 	Name              string
 	MaxConcurrency    int
 	RunTimeoutMinutes int
@@ -74,6 +75,9 @@ type cloudAgentSpec struct {
 	CheckAccess         func(context.Context, string, string, string, []string) error
 	CancelRemoteSession func(context.Context, string, string, string) error
 	CancelUnconfirmed   func(context.Context, string, string, string, string, string, time.Time) error
+	// GitHubAppToken optionally mints a short-lived repository token for a
+	// workspace. The workspace ID is supplied by the supervisor.
+	GitHubAppToken func(context.Context, string, string, string) (string, int64, error)
 }
 
 type cloudAgentView struct {
@@ -449,15 +453,21 @@ func (h *Handler) runCloudAgentSupervisor(ctx context.Context, conn *pgxpool.Con
 				continue
 			}
 			bridge, err := spec.BuildBridge(cloudAgentBridgeConfig{
-				DaemonID:          spec.Descriptor.DaemonPrefix + ws,
-				MulticaURL:        serverURL,
-				MulticaToken:      cfg.MulticaToken,
-				WorkspaceID:       ws,
-				BaseURL:           spec.baseURL(cfg),
-				Token:             cfg.Token,
-				EnvironmentID:     cfg.EnvironmentID,
-				VaultIDs:          cfg.VaultIDs,
-				GitHubTokens:      cfg.GitHubTokens,
+				DaemonID:      spec.Descriptor.DaemonPrefix + ws,
+				MulticaURL:    serverURL,
+				MulticaToken:  cfg.MulticaToken,
+				WorkspaceID:   ws,
+				BaseURL:       spec.baseURL(cfg),
+				Token:         cfg.Token,
+				EnvironmentID: cfg.EnvironmentID,
+				VaultIDs:      cfg.VaultIDs,
+				GitHubTokens:  cfg.GitHubTokens,
+				GitHubAppToken: func(tokenCtx context.Context, owner, repo string) (string, int64, error) {
+					if spec.GitHubAppToken == nil {
+						return "", 0, cloudagent.ErrGitHubAppNotCovered
+					}
+					return spec.GitHubAppToken(tokenCtx, ws, owner, repo)
+				},
 				Name:              cfg.Name,
 				MaxConcurrency:    cfg.MaxConcurrency,
 				RunTimeoutMinutes: cfg.RunTimeoutMinutes,

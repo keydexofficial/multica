@@ -166,7 +166,7 @@ Qoder 的 quick-create 指的是 **Multica 的“用已有 agent 快速创建 is
 - quick-create 可以由 squad leader 执行并分配给 squad；普通场景分配给对应 agent。
 - 没有有效 `qoder_agent_id` 时，quick-create 也会在创建 session 前失败。
 
-Claude Managed Agents 和 OMA Managed Agents 的 v1 则直接拒绝 quick-create，不提供这个流程。
+Claude Managed Agents 的 v1 仍然拒绝 quick-create；OMA Managed Agents 已支持同样的流程，但 quick-create 附件仍不支持。
 
 ### 3.4 其他限制
 
@@ -182,15 +182,18 @@ Claude Managed Agents 和 OMA Managed Agents 的 v1 则直接拒绝 quick-create
 
 - 不能创建 OMA 侧 agent 或 environment；必须绑定已有 `oma_agent_id` 和已有 `environment_id`。
 - 支持 issue 与 chat：
-  - issue 行为与 Claude/Qoder 的 issue 路径一致。
+  - issue 行为与 Qoder 的 issue 路径一致，包括 issue 附件：图片作为消息内容块，其他文件上传到 OMA Files 后挂载到 session；单个附件上限 5 MB，超出或类型被拒时在 prompt 中列为不可用。带文件附件的 issue run 不续用旧 session（仅图片的 issue 仍可续用，图片随消息发送）。
   - chat 支持文本、图片和文件附件：图片作为消息内容块，其他文件上传到 OMA Files 后挂载到 session；单个附件上限 5 MB，超出或类型被拒时在 prompt 中列为不可用。
   - chat 中 agent 写到 `/mnt/user-data/outputs/` 的文件会按 session 文件资源读取、下载并附加到回复；单个文件上限 10 MB，无法附加时回复中带提示。
-  - chat 仍要求 OMA agent 能自主执行；`requires_action` 会让运行失败。
-- quick-create、local directory 不支持。
-- tool 必须配置为 `always_allow`。
+  - chat 仍要求 OMA agent 能自主执行；`requires_action`（工具确认或未知 custom tool）会让运行失败。已记录的 custom tool 调用会收到一个明确的错误结果，避免会话长期挂起。
+- squad leader 与 quick-create 已支持：leader 由桥接层代发 delegation comment 并记录 squad evaluation；quick-create 由 agent 草拟 issue JSON，桥接层用 task credential 创建 issue。quick-create 附件仍不支持。
+- local directory 不支持。
+- tool 仍必须配置为 `always_allow`；桥接层不执行交互式工具确认。
+- 仓库凭证优先使用连接中手工配置的 token；缺失时回退到工作区 GitHub App 的短期 installation token。轮换 token 会在约 45 分钟后重新签发并推入运行中的 session。
 - OMA 侧模型、工具、skill 在 OMA agent 上配置。
 - 本仓库额外为 OMA profile 增加了 usage 上报；Claude 路径仍保留 PR #9761 中“usage/billing reporting 未实现”的限制。
-- chat 能力只在 OMA profile 打开；Claude Managed Agents 仍为 issue-only。
+- chat、issue 附件、squad leader 与 quick-create 能力只在 OMA profile 打开；Claude Managed Agents 仍为 issue-only，且拒绝 issue 附件、leader 与 quick-create。
+- OMA 协议本身还支持 interactive tool confirmation、session budget、SSE、multiagent/threads、per-session overrides、custom tools 客户端执行、agent/environment/skill CRUD、commit checkout 与多仓库；这些仍未接入桥接层。custom tool 调用目前只会收到“bridge 不执行”的错误结果，避免会话挂起。
 
 实现与设计细节见 `docs/oma-cloud-runtime.md`。
 

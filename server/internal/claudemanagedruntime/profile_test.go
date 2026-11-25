@@ -18,7 +18,7 @@ func omaProfile() Profile {
 
 func TestOMAProfileIdentity(t *testing.T) {
 	profile := OMAProfile()
-	if profile.Provider != "oma_cloud" || profile.StandalonePrefix != "oma-bridge-" || profile.AgentBindingKey != "oma_agent_id" || profile.Usage != UsageSession || !profile.AllowPlainHTTP || !profile.BetaQuery || !profile.SkipWorkspaceKeyDetection || !profile.Chat {
+	if profile.Provider != "oma_cloud" || profile.StandalonePrefix != "oma-bridge-" || profile.AgentBindingKey != "oma_agent_id" || profile.Usage != UsageSession || !profile.AllowPlainHTTP || !profile.BetaQuery || !profile.SkipWorkspaceKeyDetection || !profile.Chat || !profile.IssueAttachments || !profile.Leader || !profile.QuickCreate || !profile.CustomTools {
 		t.Fatalf("OMA profile = %+v", profile)
 	}
 }
@@ -37,7 +37,7 @@ func TestProfileChatMatchesProviderCapability(t *testing.T) {
 func TestProfileNormalizesPartialOMA(t *testing.T) {
 	got := normalizeProfile(Profile{Provider: cloudagent.OMAProvider})
 	want := OMAProfile()
-	if got.DisplayName != want.DisplayName || got.AgentNoun != want.AgentNoun || got.AgentBindingKey != want.AgentBindingKey || got.FailureReason != want.FailureReason || got.StandalonePrefix != want.StandalonePrefix || got.Usage != want.Usage || !got.AllowPlainHTTP || !got.BetaQuery || !got.SkipWorkspaceKeyDetection || !got.Chat {
+	if got.DisplayName != want.DisplayName || got.AgentNoun != want.AgentNoun || got.AgentBindingKey != want.AgentBindingKey || got.FailureReason != want.FailureReason || got.StandalonePrefix != want.StandalonePrefix || got.Usage != want.Usage || !got.AllowPlainHTTP || !got.BetaQuery || !got.SkipWorkspaceKeyDetection || !got.Chat || !got.IssueAttachments || !got.Leader || !got.QuickCreate || !got.CustomTools {
 		t.Fatalf("normalized OMA profile = %+v", got)
 	}
 }

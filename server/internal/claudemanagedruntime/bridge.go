@@ -30,19 +30,23 @@ var ErrCleanupUnauthorized = errors.New("Provider denied session cleanup; restor
 var validVaultID = regexp.MustCompile(`^vlt_[a-zA-Z0-9_-]{1,128}$`)
 
 type Config struct {
-	DaemonID         string                                `json:"daemon_id,omitempty"`
-	LoadState        func(context.Context) ([]byte, error) `json:"-"`
-	SaveState        func(context.Context, []byte) error   `json:"-"`
-	BeforeStep       func(context.Context) (func(), error) `json:"-"`
-	OnReady          func(context.Context, string) error   `json:"-"`
-	GitHubTokens     map[string]string                     `json:"-"`
-	GitHubTokenFiles map[string]string                     `json:"github_token_files,omitempty"`
-	MulticaURL       string                                `json:"multica_url"`
-	MulticaToken     string                                `json:"multica_token"`
-	WorkspaceID      string                                `json:"workspace_id"`
-	AnthropicURL     string                                `json:"anthropic_url"`
-	AnthropicToken   string                                `json:"anthropic_token"`
-	EnvironmentID    string                                `json:"environment_id"`
+	DaemonID     string                                `json:"daemon_id,omitempty"`
+	LoadState    func(context.Context) ([]byte, error) `json:"-"`
+	SaveState    func(context.Context, []byte) error   `json:"-"`
+	BeforeStep   func(context.Context) (func(), error) `json:"-"`
+	OnReady      func(context.Context, string) error   `json:"-"`
+	GitHubTokens map[string]string                     `json:"-"`
+	// GitHubAppToken issues a short-lived installation token restricted to one
+	// repository. It is the fallback when no manual repository token is
+	// configured; rotating tokens are refreshed into live sessions.
+	GitHubAppToken   func(context.Context, string, string) (string, int64, error) `json:"-"`
+	GitHubTokenFiles map[string]string                                            `json:"github_token_files,omitempty"`
+	MulticaURL       string                                                       `json:"multica_url"`
+	MulticaToken     string                                                       `json:"multica_token"`
+	WorkspaceID      string                                                       `json:"workspace_id"`
+	AnthropicURL     string                                                       `json:"anthropic_url"`
+	AnthropicToken   string                                                       `json:"anthropic_token"`
+	EnvironmentID    string                                                       `json:"environment_id"`
 	// VaultIDs are attached to every new session, e.g. to authenticate a
 	// GitHub MCP server that opens pull requests.
 	VaultIDs          []string      `json:"vault_ids,omitempty"`
@@ -396,6 +400,11 @@ func (b *Bridge) stepRun(ctx context.Context, r *run) error {
 	if time.Now().Before(r.RetryAt) {
 		return nil
 	}
+	if r.Phase == "running" {
+		if err := b.refreshRunningCredentials(ctx, r); err != nil {
+			return err
+		}
+	}
 	if r.Phase == "creating" {
 		// The provider may have created a session before the response was lost.
 		// Reattach to it; create again only once nothing carries this task's ID.
@@ -435,17 +444,26 @@ func (b *Bridge) stepRun(ctx context.Context, r *run) error {
 	if r.Phase == "prepared" {
 		// Resolve credentials before reusing a session too, so a revoked or
 		// changed repository credential is never carried into a follow-up.
-		repositoryResources, err := b.sessionResources(r.Resources)
+		repositoryResources, repositoryFingerprint, rotating, err := b.sessionResources(ctx, r.Resources)
 		if err != nil {
 			return b.reject(ctx, r, err.Error())
 		}
-		fingerprint := b.sessionFingerprint(repositoryResources)
+		fingerprint := b.withVaults(repositoryFingerprint)
+		// A rotating credential is timestamped for the live refresh; only the
+		// timestamp is journaled, never the token.
+		if rotating {
+			r.CredentialIssuedAt = time.Now()
+		} else {
+			r.CredentialIssuedAt = time.Time{}
+		}
+		repositoryCopies := repositoryResources
 		// Chat attachments join the session as file resources. They stay out of
 		// the repository fingerprint so a follow-up can still continue a session
 		// created without them and mount this turn's files after the cursor.
+		// Issue attachments always start a fresh session.
 		resources := append([]map[string]any{}, repositoryResources...)
 		resources = append(resources, r.Files...)
-		if r.PriorSessionID != "" {
+		if r.PriorSessionID != "" && (len(r.Files) == 0 || r.MountFiles) {
 			continued, err := b.continueSession(ctx, r, fingerprint)
 			if err != nil {
 				return err
@@ -453,29 +471,57 @@ func (b *Bridge) stepRun(ctx context.Context, r *run) error {
 			if continued {
 				r.SessionID = r.PriorSessionID
 				r.Continued = true
-				// Snapshot the outputs already in the session so this turn only
-				// attaches files it produced. A failure here retries before the
-				// message is sent, so no file can arrive unrecorded.
-				if r.Reply != nil && r.Reply.Baseline == nil {
-					baseline, err := b.outputFileIDs(ctx, r.SessionID)
-					if definitelyRejected(err) {
-						// The earlier session cannot be listed; start a new one
-						// rather than retrying a session the provider refused.
+				// A GitHub App credential rotates on every resolution; push the
+				// fresh token into the reused session before any message goes
+				// out. The run stays "prepared" until the refresh completed, so
+				// a rate-limited or failed refresh retries the whole continue
+				// path next tick instead of sending with a stale credential.
+				if rotating {
+					switch err := b.refreshRepositoryCredentials(ctx, r.SessionID, repositoryCopies); {
+					case err == nil:
+					case errors.Is(err, errRefreshDeferred):
+						r.RetryAt = time.Now().Add(30 * time.Second)
+						return b.persist()
+					case errors.Is(err, errRefreshRefused):
+						// The session cannot take the update (for example the
+						// repository is no longer mounted there); start fresh.
 						r.SessionID, r.PriorSessionID, r.Continued = "", "", false
 						r.Cursor, r.CursorAt = "", ""
 						r.UsageBase, r.UsageReported = sessionUsage{}, false
-						r.Reply.resetForNewSession()
-						r.Phase = "prepared"
-						return b.persist()
-					}
-					if err != nil {
+						r.MountedFiles = 0
+						if r.Reply != nil {
+							r.Reply.resetForNewSession()
+						}
+					default:
 						return err
 					}
-					r.Reply.Baseline = baseline
 				}
-				r.Phase = "created"
-				if err := b.persist(); err != nil {
-					return err
+				if r.Continued {
+					// Snapshot the outputs already in the session so this turn
+					// only attaches files it produced. A failure here retries
+					// before the message is sent, so no file can arrive
+					// unrecorded.
+					if r.Reply != nil && r.Reply.Baseline == nil {
+						baseline, err := b.outputFileIDs(ctx, r.SessionID)
+						if definitelyRejected(err) {
+							// The earlier session cannot be listed; start a new one
+							// rather than retrying a session the provider refused.
+							r.SessionID, r.PriorSessionID, r.Continued = "", "", false
+							r.Cursor, r.CursorAt = "", ""
+							r.UsageBase, r.UsageReported = sessionUsage{}, false
+							r.Reply.resetForNewSession()
+							r.Phase = "prepared"
+							return b.persist()
+						}
+						if err != nil {
+							return err
+						}
+						r.Reply.Baseline = baseline
+					}
+					r.Phase = "created"
+					if err := b.persist(); err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -701,16 +747,32 @@ func (b *Bridge) findCreatedSession(ctx context.Context, agentID, taskID string,
 // resourcesMetadataKey stores resourceFingerprint on each session Multica creates.
 const resourcesMetadataKey = "multica_resources"
 
+type fingerprintEntry struct {
+	key        string
+	branch     string
+	credential string
+}
+
 // resourceFingerprint identifies the repositories, branches and credentials a
-// session was created with. Only this digest leaves the bridge.
+// session was created with. Only this digest leaves the bridge. The credential
+// is the stable authorization identity: a manual token, or github_app:<id> for
+// rotating installation tokens.
 func resourceFingerprint(resources []map[string]any) string {
-	h := sha256.New()
-	h.Write([]byte("multica-claude-resources-v1\n"))
+	entries := make([]fingerprintEntry, 0, len(resources))
 	for _, res := range resources {
 		raw, _ := res["url"].(string)
 		key, _ := repositoryKey(raw)
 		token, _ := res["authorization_token"].(string)
-		fmt.Fprintf(h, "%s\x00%s\x00%s\n", key, checkoutBranch(res["checkout"]), token)
+		entries = append(entries, fingerprintEntry{key: key, branch: checkoutBranch(res["checkout"]), credential: token})
+	}
+	return resourceFingerprintEntries(entries)
+}
+
+func resourceFingerprintEntries(entries []fingerprintEntry) string {
+	h := sha256.New()
+	h.Write([]byte("multica-claude-resources-v1\n"))
+	for _, entry := range entries {
+		fmt.Fprintf(h, "%s\x00%s\x00%s\n", entry.key, entry.branch, entry.credential)
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
@@ -719,7 +781,12 @@ func resourceFingerprint(resources []map[string]any) string {
 // included because vault_ids cannot be changed on an existing session; without
 // any, it equals resourceFingerprint so earlier sessions stay reusable.
 func (b *Bridge) sessionFingerprint(resources []map[string]any) string {
-	fingerprint := resourceFingerprint(resources)
+	return b.withVaults(resourceFingerprint(resources))
+}
+
+// withVaults extends a repository fingerprint with the vault set, which also
+// cannot change on an existing session.
+func (b *Bridge) withVaults(fingerprint string) string {
 	if len(b.cfg.VaultIDs) == 0 {
 		return fingerprint
 	}
@@ -887,6 +954,11 @@ func ignoreMissing(err error) error {
 	return err
 }
 func (b *Bridge) deliver(ctx context.Context, r *run) error {
+	if r.QuickCreate != nil && !r.QuickCreate.Created && r.Outcome == "completed" {
+		if err := b.createQuickIssue(ctx, r); err != nil {
+			return err
+		}
+	}
 	if r.Outcome == "completed" && r.Reply != nil {
 		if err := b.collectReplyFiles(ctx, r); err != nil {
 			return err
@@ -902,6 +974,11 @@ func (b *Bridge) deliver(ctx context.Context, r *run) error {
 	}
 	if err := b.reportUsage(ctx, r); err != nil {
 		return err
+	}
+	if r.Leader != nil && r.Outcome == "completed" {
+		if err := b.deliverLeader(ctx, r); err != nil {
+			return err
+		}
 	}
 	body := map[string]any{"session_id": r.SessionID}
 	suffix := "/complete"

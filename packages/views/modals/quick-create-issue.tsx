@@ -186,9 +186,7 @@ export function AgentCreatePanel({
           !a.archived_at &&
           isAgentRuntimeBound(a) &&
           !runtimes.some(
-            (r) =>
-              r.id === a.runtime_id &&
-              (r.provider === "claude_managed" || r.provider === "oma_cloud"),
+            (r) => r.id === a.runtime_id && r.provider === "claude_managed",
           ) &&
           canAssignAgent(a, userId, memberRole),
       ),

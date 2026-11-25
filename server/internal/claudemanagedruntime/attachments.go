@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"path"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 const (
@@ -15,9 +17,11 @@ const (
 	maxChatFileBytes = 5 << 20
 	// maxChatImageBytes matches the image limit of a user message content block.
 	maxChatImageBytes = 5 << 20
-	// chatAttachmentMountDir prefixes each task's uploaded files so names from
-	// different turns of a continued session never collide.
-	chatAttachmentMountDir = "/mnt/session/uploads/"
+	// attachmentUploadNamespace is the public mount_path namespace OMA maps
+	// beneath the sandbox uploads root. The agent-visible path is
+	// /mnt/session/uploads/<rest>.
+	attachmentUploadNamespace = "/uploads/"
+	attachmentSandboxRoot     = "/mnt/session/uploads/"
 )
 
 var imageMediaTypes = map[string]bool{
@@ -28,13 +32,15 @@ var imageMediaTypes = map[string]bool{
 }
 
 // chatAttachmentMeta is the workspace attachment record a task credential can
-// read. Chat claims carry only IDs and names.
+// read. Chat claims carry only IDs and names, so NeedsMetadata defers the read
+// until the file is transferred; issue claims already include the metadata.
 type chatAttachmentMeta struct {
-	ID          string `json:"id"`
-	Filename    string `json:"filename"`
-	ContentType string `json:"content_type"`
-	SizeBytes   int64  `json:"size_bytes"`
-	DownloadURL string `json:"download_url"`
+	ID            string `json:"id"`
+	Filename      string `json:"filename"`
+	ContentType   string `json:"content_type"`
+	SizeBytes     int64  `json:"size_bytes"`
+	DownloadURL   string `json:"download_url"`
+	NeedsMetadata bool   `json:"-"`
 }
 
 // attachChatFiles hands a chat message's files to the session: images become
@@ -45,20 +51,55 @@ func (b *Bridge) attachChatFiles(ctx context.Context, taskAPI *api, t *claimedTa
 	if len(t.ChatAttachments) == 0 {
 		return nil
 	}
+	attachments := make([]chatAttachmentMeta, 0, len(t.ChatAttachments))
+	for _, attached := range t.ChatAttachments {
+		attachments = append(attachments, chatAttachmentMeta{ID: attached.ID, Filename: attached.Filename, NeedsMetadata: true})
+	}
+	return b.attachFiles(ctx, taskAPI, "Message attachments", t.ID, attachments, true, r, p)
+}
+
+// attachIssueFiles hands an issue's attachments to the session the same way,
+// but from metadata already present on the issue response. Issue runs never
+// continue a prior session when files are attached, so every mount starts from
+// a clean session.
+func (b *Bridge) attachIssueFiles(ctx context.Context, taskAPI *api, t *claimedTask, attachments []chatAttachmentMeta, r *run, p *strings.Builder) error {
+	if len(attachments) == 0 {
+		return nil
+	}
+	if !b.profile.IssueAttachments {
+		return fmt.Errorf("issue attachments are not supported by the %s bridge", b.profile.DisplayName)
+	}
+	return b.attachFiles(ctx, taskAPI, "Issue attachments", t.ID, attachments, false, r, p)
+}
+
+// attachmentMountPath is the public mount_path (uploads namespace) and the
+// agent-visible path for one attached file. OMA prefixes the public namespace
+// with /mnt/session when it mounts the sandbox, so the prompt must name the
+// prefixed path while the resource carries the unprefixed one.
+func attachmentMountPath(taskID, name string) (mountPath, visiblePath string) {
+	rest := taskID + "/" + name
+	return attachmentUploadNamespace + rest, attachmentSandboxRoot + rest
+}
+
+func (b *Bridge) attachFiles(ctx context.Context, taskAPI *api, heading, taskID string, attachments []chatAttachmentMeta, resolveMetadata bool, r *run, p *strings.Builder) error {
 	var mounted, images, skipped []string
 	used := map[string]bool{}
-	for _, attached := range t.ChatAttachments {
-		var meta chatAttachmentMeta
-		err := taskAPI.call(ctx, http.MethodGet, "/api/attachments/"+url.PathEscape(attached.ID), nil, &meta)
-		var missing *apiError
-		if errors.As(err, &missing) && missing.Status == http.StatusNotFound {
-			skipped = append(skipped, uniqueAttachmentName(attached.Filename, attached.ID, used)+" (deleted)")
-			continue
+	for _, attached := range attachments {
+		meta := attached
+		if resolveMetadata && meta.NeedsMetadata {
+			var current chatAttachmentMeta
+			err := taskAPI.call(ctx, http.MethodGet, "/api/attachments/"+url.PathEscape(meta.ID), nil, &current)
+			var missing *apiError
+			if errors.As(err, &missing) && missing.Status == http.StatusNotFound {
+				skipped = append(skipped, uniqueAttachmentName(meta.Filename, meta.ID, used)+" (deleted)")
+				continue
+			}
+			if err != nil {
+				return fmt.Errorf("read chat attachment %s: %w", meta.Filename, err)
+			}
+			meta = current
 		}
-		if err != nil {
-			return fmt.Errorf("read chat attachment %s: %w", attached.Filename, err)
-		}
-		name := uniqueAttachmentName(meta.Filename, attached.ID, used)
+		name := uniqueAttachmentName(meta.Filename, meta.ID, used)
 		mediaType := strings.ToLower(strings.TrimSpace(strings.Split(meta.ContentType, ";")[0]))
 		limit := int64(maxChatFileBytes)
 		if imageMediaTypes[mediaType] {
@@ -70,7 +111,7 @@ func (b *Bridge) attachChatFiles(ctx context.Context, taskAPI *api, t *claimedTa
 			continue
 		}
 		if err != nil {
-			return fmt.Errorf("download chat attachment %s: %w", name, err)
+			return fmt.Errorf("download attachment %s: %w", name, err)
 		}
 		fileID, err := b.uploadProviderFile(ctx, name, mediaType, data)
 		if err != nil {
@@ -86,11 +127,11 @@ func (b *Bridge) attachChatFiles(ctx context.Context, taskAPI *api, t *claimedTa
 			images = append(images, name)
 			continue
 		}
-		mountPath := chatAttachmentMountDir + t.ID + "/" + name
+		mountPath, visiblePath := attachmentMountPath(taskID, name)
 		r.Files = append(r.Files, map[string]any{"type": "file", "file_id": fileID, "mount_path": mountPath})
-		mounted = append(mounted, mountPath)
+		mounted = append(mounted, visiblePath)
 	}
-	p.WriteString("\nMessage attachments:\n")
+	fmt.Fprintf(p, "\n%s:\n", heading)
 	for _, mountedPath := range mounted {
 		fmt.Fprintf(p, "- %s (mounted file)\n", mountedPath)
 	}
@@ -134,7 +175,7 @@ func (b *Bridge) betaPath(path string) string {
 // uniqueAttachmentName returns a path-free, unique name for a mount path.
 func uniqueAttachmentName(filename, fallbackID string, used map[string]bool) string {
 	name := strings.Map(func(r rune) rune {
-		if r == '/' || r == '\\' || r < 0x20 {
+		if r == '/' || r == '\\' || unicode.IsControl(r) {
 			return '_'
 		}
 		return r
@@ -146,7 +187,13 @@ func uniqueAttachmentName(filename, fallbackID string, used map[string]bool) str
 		name = "attachment"
 	}
 	if len(name) > 200 {
-		name = name[len(name)-200:]
+		// Truncate from the front without splitting a multi-byte rune: OMA
+		// rejects a mount path that is not valid UTF-8.
+		start := len(name) - 200
+		for start < len(name) && !utf8.RuneStart(name[start]) {
+			start++
+		}
+		name = name[start:]
 	}
 	unique := name
 	for i := 2; used[unique]; i++ {

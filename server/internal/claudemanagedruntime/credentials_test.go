@@ -1,6 +1,7 @@
 package claudemanagedruntime
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,7 +16,7 @@ func TestRepositoryCredentialRequestOnly(t *testing.T) {
 	}
 	b := &Bridge{cfg: Config{GitHubTokenFiles: map[string]string{"https://github.com/Owner/Repo.git": file}}}
 	r := &run{Resources: []map[string]any{{"type": "github_repository", "url": "https://github.com/owner/repo", "checkout": map[string]string{"type": "branch", "name": "main"}}}}
-	request, err := b.sessionResources(r.Resources)
+	request, _, _, err := b.sessionResources(context.Background(), r.Resources)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,12 +37,12 @@ func TestRepositoryCredentialRequestOnly(t *testing.T) {
 	if err := os.WriteFile(file, []byte("rotated-secret"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	request, err = b.sessionResources(r.Resources)
+	request, _, _, err = b.sessionResources(context.Background(), r.Resources)
 	if err != nil || request[0]["authorization_token"] != "rotated-secret" {
 		t.Fatal("credential rotation not picked up")
 	}
 	r.Resources[0]["url"] = "https://github.com/owner/another"
-	if _, err := b.sessionResources(r.Resources); err == nil {
+	if _, _, _, err := b.sessionResources(context.Background(), r.Resources); err == nil {
 		t.Fatal("credential crossed repository boundary")
 	}
 }

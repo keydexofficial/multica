@@ -44,13 +44,32 @@ type run struct {
 	SessionID          string           `json:"session_id,omitempty"`
 	Prompt             string           `json:"prompt,omitempty"`
 	Resources          []map[string]any `json:"resources,omitempty"`
-	// Files are chat attachments uploaded to the provider and mounted into the
-	// session. Images go into the message instead. MountedFiles counts the
-	// files already added to a continued session, so a retry never mounts one
-	// twice.
+	// Files are chat or issue attachments uploaded to the provider and mounted
+	// into the session. Images go into the message instead. MountedFiles counts
+	// the files already added to a continued session, so a retry never mounts
+	// one twice. MountFiles marks chat files that may join a continued session;
+	// issue attachments always start a fresh session.
 	Files        []map[string]any `json:"files,omitempty"`
 	Images       []map[string]any `json:"images,omitempty"`
+	MountFiles   bool             `json:"mount_files,omitempty"`
 	MountedFiles int              `json:"mounted_files,omitempty"`
+
+	// CredentialIssuedAt timestamps the last rotating GitHub App token issuance
+	// for this run. Non-zero means the repository credential rotates and the
+	// live session gets a fresh token before the one-hour expiry; the zero value
+	// covers static credentials and refreshes that were refused for good. Only
+	// the timestamp is journaled, never the token.
+	CredentialIssuedAt time.Time `json:"credential_issued_at,omitempty"`
+
+	QuickCreate *quickCreate `json:"quick_create,omitempty"`
+	Leader      *squadLeader `json:"leader,omitempty"`
+
+	// CustomToolUses records custom tool calls seen in this run so a paused
+	// session can be answered after a restart. Submitted and Answered keep the
+	// write-once behavior: an ambiguous result is never replayed.
+	CustomToolUses      map[string]string `json:"custom_tool_uses,omitempty"`
+	CustomToolSubmitted map[string]bool   `json:"custom_tool_submitted,omitempty"`
+	CustomToolAnswered  map[string]bool   `json:"custom_tool_answered,omitempty"`
 	// Reply tracks files the agent produced under the session's outputs
 	// directory and the bridge's progress attaching them to the chat reply.
 	Reply   *chatReply `json:"reply,omitempty"`

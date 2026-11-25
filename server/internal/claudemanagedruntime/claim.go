@@ -28,13 +28,24 @@ type claimedTask struct {
 	ProjectDescription    string              `json:"project_description,omitempty"`
 	HandoffNote           string              `json:"handoff_note,omitempty"`
 	CoalescedComments     []claimedComment    `json:"coalesced_comments,omitempty"`
+	TriggerCommentID      string              `json:"trigger_comment_id,omitempty"`
 	TriggerCommentContent string              `json:"trigger_comment_content,omitempty"`
 	TriggerAuthorName     string              `json:"trigger_author_name,omitempty"`
 	ProjectResources      []claimedResource   `json:"project_resources,omitempty"`
 	Repos                 []claimedRepo       `json:"repos,omitempty"`
+
+	QuickCreatePrompt        string          `json:"quick_create_prompt,omitempty"`
+	QuickCreatePriority      string          `json:"quick_create_priority,omitempty"`
+	QuickCreateDueDate       string          `json:"quick_create_due_date,omitempty"`
+	QuickCreateAttachmentIDs []string        `json:"quick_create_attachment_ids,omitempty"`
+	QuickCreateSourceContext json.RawMessage `json:"quick_create_source_context,omitempty"`
+	ProjectID                string          `json:"project_id,omitempty"`
+	ParentIssueID            string          `json:"parent_issue_id,omitempty"`
+	SquadID                  string          `json:"squad_id,omitempty"`
 }
 
 type claimedAgent struct {
+	ID            string            `json:"id"`
 	Instructions  string            `json:"instructions"`
 	Skills        []claimedSkill    `json:"skills,omitempty"`
 	SkillRefs     []json.RawMessage `json:"skill_refs,omitempty"`

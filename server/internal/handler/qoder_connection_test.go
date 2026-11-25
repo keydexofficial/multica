@@ -322,13 +322,13 @@ func TestQoderQuickCreateLimits(t *testing.T) {
 	}
 	ctx := context.Background()
 	qoderID := parseUUID(dbfx.Runtime(t, "Qoder quick-create limits runtime", testutil.Cols{"provider": "qoder_cloud", "runtime_mode": "cloud", "metadata": `{}`}))
-	if status, payload := testHandler.checkQuickCreateQoderLimits(ctx, "issue", qoderID, true); status != http.StatusUnprocessableEntity || payload["code"] != "agent_unavailable" || !strings.Contains(payload["reason"].(string), "attachments") {
+	if status, payload := testHandler.checkQuickCreateCloudAttachments(ctx, "issue", qoderID, true); status != http.StatusUnprocessableEntity || payload["code"] != "agent_unavailable" || !strings.Contains(payload["reason"].(string), "attachments") {
 		t.Fatalf("Qoder quick-create attachments should be rejected, got %d: %v", status, payload)
 	}
-	if status, payload := testHandler.checkQuickCreateQoderLimits(ctx, "issue", qoderID, false); status != 0 {
+	if status, payload := testHandler.checkQuickCreateCloudAttachments(ctx, "issue", qoderID, false); status != 0 {
 		t.Fatalf("plain Qoder quick-create should be accepted, got %d: %v", status, payload)
 	}
-	if status, payload := testHandler.checkQuickCreateQoderLimits(ctx, "issue", parseUUID(testRuntimeID), true); status != 0 {
+	if status, payload := testHandler.checkQuickCreateCloudAttachments(ctx, "issue", parseUUID(testRuntimeID), true); status != 0 {
 		t.Fatalf("daemon runtime should be accepted, got %d: %v", status, payload)
 	}
 }

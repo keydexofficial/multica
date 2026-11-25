@@ -549,6 +549,18 @@ describe("AgentCreatePanel", () => {
     expect(pickerRow(/Cloud Squad/)).toBeInTheDocument();
   });
 
+  it("selects OMA agents without the daemon CLI version gate", () => {
+    mockRuntimesData.list = [{ id: "runtime-1", provider: "oma_cloud", metadata: {} }];
+    mockQuickCreateStore.lastActorType = "agent";
+    mockQuickCreateStore.lastActorId = "agent-1";
+    mockSquadsData.list = [{ id: "squad-1", name: "OMA Squad", leader_id: "agent-1", archived_at: null }];
+    renderPanel({ onClose: vi.fn(), isExpanded: false, setIsExpanded: vi.fn() });
+    expect(screen.getByRole("button", { name: /^Create$/i })).toBeEnabled();
+    expect(screen.queryByText(/daemon.*version/i)).not.toBeInTheDocument();
+    expect(screen.getAllByText("Bohan").length).toBeGreaterThan(0);
+    expect(pickerRow(/OMA Squad/)).toBeInTheDocument();
+  });
+
   it("blocks Qoder agents when the prompt references an attachment", () => {
     mockRuntimesData.list = [{ id: "runtime-1", provider: "qoder_cloud", metadata: {} }];
     mockQuickCreateStore.lastActorType = "agent";

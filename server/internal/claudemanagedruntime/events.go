@@ -23,9 +23,11 @@ type event struct {
 	} `json:"content"`
 	Input      map[string]any `json:"input"`
 	StopReason struct {
-		Type string `json:"type"`
+		Type     string   `json:"type"`
+		EventIDs []string `json:"event_ids"`
 	} `json:"stop_reason"`
-	Error struct {
+	SessionThreadID string `json:"session_thread_id"`
+	Error           struct {
 		Message     string `json:"message"`
 		RetryStatus struct {
 			Type string `json:"type"`
@@ -141,6 +143,15 @@ func (b *Bridge) events(ctx context.Context, r *run) error {
 			msg["call_id"] = e.ID
 			msg["tool"] = e.Name
 			msg["input"] = e.Input
+			if e.Type == "agent.custom_tool_use" && b.profile.CustomTools && e.SessionThreadID == "" {
+				// The session pauses until a result arrives. Record the call and
+				// answer it once the provider reports the blocking event IDs;
+				// subagent-thread calls cannot be routed back by this bridge.
+				if r.CustomToolUses == nil {
+					r.CustomToolUses = map[string]string{}
+				}
+				r.CustomToolUses[e.ID] = e.Name
+			}
 		case "agent.tool_result", "agent.mcp_tool_result", "agent.custom_tool_result":
 			r.resume()
 			msg["type"] = "tool_result"
@@ -157,6 +168,19 @@ func (b *Bridge) events(ctx context.Context, r *run) error {
 				r.Failure = e.Error.Message
 			}
 		case "session.status_idle":
+			if e.StopReason.Type == "requires_action" && b.profile.CustomTools {
+				handled, err := b.answerCustomTools(ctx, r, e.StopReason.EventIDs)
+				if err != nil {
+					return err
+				}
+				if handled {
+					// The session resumes once the queued results arrive; a new
+					// idle/running event will follow, so this pause is not final.
+					r.Phase = "running"
+					r.IdleSince = time.Time{}
+					break
+				}
+			}
 			if e.StopReason.Type == "end_turn" && r.Failure == "" {
 				r.Phase = "idle"
 				r.IdleSince = time.Now()
@@ -200,6 +224,79 @@ func (b *Bridge) events(ctx context.Context, r *run) error {
 		return fmt.Errorf("submission not yet confirmed; inspect %s session %s before any manual resubmission", b.profile.DisplayName, r.SessionID)
 	}
 	return nil
+}
+
+// answerCustomTools replies to custom tool calls that are blocking a paused
+// session. It returns true only when every blocking event is a custom tool
+// call this bridge recorded; any other blocking action (a tool confirmation,
+// or a subagent-thread call) is left to the normal failure path. Results are
+// write-once: an ambiguous response is never replayed, because the provider
+// has no idempotency key for it.
+func (b *Bridge) answerCustomTools(ctx context.Context, r *run, eventIDs []string) (bool, error) {
+	if len(eventIDs) == 0 || r.SessionID == "" || r.Failure != "" {
+		return false, nil
+	}
+	for _, id := range eventIDs {
+		if _, ok := r.CustomToolUses[id]; !ok {
+			return false, nil
+		}
+	}
+	if r.CustomToolSubmitted == nil {
+		r.CustomToolSubmitted = map[string]bool{}
+	}
+	if r.CustomToolAnswered == nil {
+		r.CustomToolAnswered = map[string]bool{}
+	}
+	for _, id := range eventIDs {
+		if r.CustomToolAnswered[id] {
+			continue
+		}
+		if r.CustomToolSubmitted[id] {
+			// A prior attempt may have reached the provider. The run cannot be
+			// safely retried without replaying a write, so fail it and leave
+			// the remote session for cancellation.
+			r.Failure = fmt.Sprintf("%s custom tool result delivery could not be confirmed; inspect session %s", b.profile.DisplayName, r.SessionID)
+			return false, nil
+		}
+		name := r.CustomToolUses[id]
+		if name == "" {
+			name = "the custom tool"
+		}
+		r.CustomToolSubmitted[id] = true
+		if err := b.persist(); err != nil {
+			return false, err
+		}
+		body := map[string]any{"events": []map[string]any{{
+			"type":               "user.custom_tool_result",
+			"custom_tool_use_id": id,
+			"is_error":           true,
+			"content": []map[string]string{{
+				"type": "text",
+				"text": "This Multica bridge does not execute custom tools. " + name + " was not run. Continue without it, or configure the work to use the sandbox and write files under " + outputDirPrefix + ".",
+			}},
+		}}}
+		if err := b.anthropic.call(ctx, http.MethodPost, "/sessions/"+url.PathEscape(r.SessionID)+"/events", body, nil); err != nil {
+			if rateLimited(err) {
+				r.CustomToolSubmitted[id] = false
+				if persistErr := b.persist(); persistErr != nil {
+					return false, persistErr
+				}
+				return false, err
+			}
+			if definitelyRejected(err) {
+				r.Failure = fmt.Sprintf("%s rejected a custom tool result: %v", b.profile.DisplayName, err)
+				return false, nil
+			}
+			// Never replay a write whose outcome is unknown.
+			r.Failure = fmt.Sprintf("%s custom tool result delivery could not be confirmed; inspect session %s", b.profile.DisplayName, r.SessionID)
+			return false, nil
+		}
+		r.CustomToolAnswered[id] = true
+		if err := b.persist(); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
 }
 
 // latestEventID returns the newest event's ID. A continued session already

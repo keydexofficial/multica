@@ -19,6 +19,18 @@ type Profile struct {
 	// expose no chat capability are never sent one, and this keeps a standalone
 	// bridge from silently running a task its documented contract excludes.
 	Chat bool
+	// IssueAttachments hands issue attachments to the session. Providers whose
+	// contract excludes them reject the run instead of silently dropping files.
+	IssueAttachments bool
+	// Leader lets the bridge run squad-leader turns and deliver the delegation
+	// comment and evaluation with the task credential.
+	Leader bool
+	// QuickCreate lets the bridge draft an issue and create it with the task
+	// credential, since a managed session has no Multica CLI.
+	QuickCreate bool
+	// CustomTools answers agent custom tool calls with an explicit error result
+	// so a session pauses instead of hanging forever on an unhandled tool.
+	CustomTools bool
 }
 
 func ClaudeProfile() Profile {
@@ -50,6 +62,10 @@ func OMAProfile() Profile {
 		SkipWorkspaceKeyDetection: true,
 		Usage:                     UsageSession,
 		Chat:                      true,
+		IssueAttachments:          true,
+		Leader:                    true,
+		QuickCreate:               true,
+		CustomTools:               true,
 	}
 }
 
@@ -64,6 +80,10 @@ func normalizeProfile(profile Profile) Profile {
 		profile.BetaQuery = true
 		profile.SkipWorkspaceKeyDetection = true
 		profile.Chat = true
+		profile.IssueAttachments = true
+		profile.Leader = true
+		profile.QuickCreate = true
+		profile.CustomTools = true
 	}
 	if profile.DisplayName == "" {
 		profile.DisplayName = defaults.DisplayName

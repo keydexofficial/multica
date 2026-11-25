@@ -36,6 +36,9 @@ type apiError struct {
 	// WorkspaceKeyRequired means Anthropic asked for anthropic-workspace-id,
 	// i.e. the key is not workspace-scoped.
 	WorkspaceKeyRequired bool
+	// Code is the Multica API's error discriminator, when present. The body is
+	// never surfaced; only this stable code is retained for classification.
+	Code string
 }
 
 func (e *apiError) Error() string {
@@ -45,15 +48,19 @@ func (e *apiError) Error() string {
 	return fmt.Sprintf("remote API returned HTTP %d", e.Status)
 }
 
-// requiresWorkspaceHeader inspects an error body without ever returning it.
-func requiresWorkspaceHeader(body io.Reader) bool {
+// apiErrorDetails inspects an error body without ever returning it.
+func apiErrorDetails(body io.Reader) (workspaceRequired bool, code string) {
 	var envelope struct {
 		Error struct {
 			Message string `json:"message"`
 		} `json:"error"`
+		Code string `json:"code"`
 	}
 	b, _ := io.ReadAll(io.LimitReader(body, 64<<10))
-	return json.Unmarshal(b, &envelope) == nil && strings.Contains(strings.ToLower(envelope.Error.Message), "anthropic-workspace-id")
+	if json.Unmarshal(b, &envelope) != nil {
+		return false, ""
+	}
+	return strings.Contains(strings.ToLower(envelope.Error.Message), "anthropic-workspace-id"), envelope.Code
 }
 
 const defaultRetryDelay = 30 * time.Second
@@ -206,10 +213,12 @@ func (a *api) download(ctx context.Context, rawPath string, limit int64) ([]byte
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		workspaceRequired, code := apiErrorDetails(resp.Body)
 		return nil, &apiError{
 			Status:               resp.StatusCode,
 			RetryAfter:           parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()),
-			WorkspaceKeyRequired: a.detectWorkspaceKey && resp.StatusCode >= 400 && resp.StatusCode < 500 && requiresWorkspaceHeader(resp.Body),
+			WorkspaceKeyRequired: a.detectWorkspaceKey && resp.StatusCode >= 400 && resp.StatusCode < 500 && workspaceRequired,
+			Code:                 code,
 		}
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
@@ -244,10 +253,12 @@ func (a *api) do(ctx context.Context, method, path, contentType string, body io.
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		workspaceRequired, code := apiErrorDetails(resp.Body)
 		return &apiError{
 			Status:               resp.StatusCode,
 			RetryAfter:           parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()),
-			WorkspaceKeyRequired: a.detectWorkspaceKey && resp.StatusCode >= 400 && resp.StatusCode < 500 && requiresWorkspaceHeader(resp.Body),
+			WorkspaceKeyRequired: a.detectWorkspaceKey && resp.StatusCode >= 400 && resp.StatusCode < 500 && workspaceRequired,
+			Code:                 code,
 		}
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20+1))
