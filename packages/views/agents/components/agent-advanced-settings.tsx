@@ -300,6 +300,7 @@ export function AgentAdvancedSettings({
                       agent={agent}
                       members={members}
                       currentUserId={currentUserId}
+                      canEdit={canEdit}
                       onDirtyChange={setDirty}
                       onUpdate={onUpdate}
                     />
